@@ -12,6 +12,7 @@ This server offers five tools:
 """
 
 import asyncio
+import json
 import logging
 import os
 import random
@@ -33,8 +34,10 @@ logger = logging.getLogger(__name__)
 
 # Server configuration
 server = Server("blog-mcp-server")
-BASE_URL = "https://idvork.in"
-ALLOWED_DOMAINS = {"idvork.in"}
+GITHUB_REPO_URL = "https://api.github.com/repos/idvorkin/idvorkin.github.io"
+GITHUB_RAW_URL = "https://raw.githubusercontent.com/idvorkin/idvorkin.github.io/master"
+BLOG_URL = "https://idvork.in"
+ALLOWED_DOMAINS = {"api.github.com", "raw.githubusercontent.com"}
 
 
 class BlogFetchError(Exception):
@@ -62,14 +65,12 @@ class BlogPost(BaseModel):
     
     @validator('url')
     def validate_url(cls, v):
-        """Validate that URL belongs to allowed domains."""
+        """Validate that URL has valid scheme."""
         if isinstance(v, str):
             parsed = urlparse(v)
         else:
             parsed = urlparse(str(v))
         
-        if parsed.netloc not in ALLOWED_DOMAINS:
-            raise ValueError(f"URL domain {parsed.netloc} not allowed")
         if parsed.scheme not in {"http", "https"}:
             raise ValueError(f"URL scheme {parsed.scheme} not allowed")
         return v
@@ -119,29 +120,28 @@ async def fetch_url(url: str) -> str:
             raise BlogFetchError(f"Unexpected error fetching {url}: {e}")
 
 
-async def get_blog_posts() -> list[str]:
-    """Get all blog post URLs from the sitemap or archive."""
+async def get_blog_posts() -> list[dict]:
+    """Get all blog post files from GitHub repository."""
     try:
-        # Try to get from sitemap first
-        sitemap_url = urljoin(BASE_URL, "/sitemap.xml")
-        content = await fetch_url(sitemap_url)
+        # Get files from the _d directory containing markdown blog posts
+        api_url = f"{GITHUB_REPO_URL}/contents/_d"
+        content = await fetch_url(api_url)
         
-        # Extract URLs from sitemap
-        urls = re.findall(r'<loc>(.*?)</loc>', content)
-        # Filter for blog posts (assuming they contain certain patterns)
-        blog_urls = [url for url in urls if any(pattern in url for pattern in ['/posts/', '/blog/', '/articles/'])]
+        # Parse JSON response
+        files_data = json.loads(content)
         
-        if blog_urls:
-            return blog_urls
-            
-        # Fallback: try to scrape main page for blog links
-        main_content = await fetch_url(BASE_URL)
-        # Look for blog post links
-        links = re.findall(r'href="([^"]*)"', main_content)
-        blog_urls = [urljoin(BASE_URL, link) for link in links 
-                    if any(pattern in link for pattern in ['/posts/', '/blog/', '/articles/'])]
+        # Filter for markdown files
+        markdown_files = []
+        for file_info in files_data:
+            if file_info.get('name', '').endswith('.md') and file_info.get('type') == 'file':
+                markdown_files.append({
+                    'name': file_info['name'],
+                    'path': file_info['path'],
+                    'download_url': file_info['download_url'],
+                    'html_url': f"{BLOG_URL}/{file_info['name'].replace('.md', '')}"
+                })
         
-        return blog_urls[:50]  # Limit to 50 posts
+        return markdown_files[:50]  # Limit to 50 posts
         
     except InvalidURLError as e:
         logger.error(f"URL validation error getting blog posts: {e}")
@@ -149,73 +149,88 @@ async def get_blog_posts() -> list[str]:
     except BlogFetchError as e:
         logger.error(f"Fetch error getting blog posts: {e}")
         return []
+    except json.JSONDecodeError as e:
+        logger.error(f"JSON decode error getting blog posts: {e}")
+        return []
     except Exception as e:
         logger.error(f"Unexpected error getting blog posts: {e}")
         return []
 
 
-async def extract_blog_content(url: str) -> BlogPost:
-    """Extract blog post content from a URL using BeautifulSoup."""
+async def extract_blog_content_from_file(file_info: dict) -> BlogPost:
+    """Extract blog post content from a markdown file."""
     try:
-        content = await fetch_url(url)
-        soup = BeautifulSoup(content, 'html.parser')
+        # Fetch the raw markdown content
+        markdown_content = await fetch_url(file_info['download_url'])
         
-        # Extract title
-        title_elem = soup.find('title')
-        title = title_elem.get_text(strip=True) if title_elem else "Untitled"
+        # Parse markdown content to extract title and content
+        lines = markdown_content.split('\n')
+        title = "Untitled"
+        content = markdown_content
+        date = None
         
-        # Extract main content using multiple fallback strategies
-        content_selectors = ['article', 'main', '.content', '.post', '#content', '.entry']
-        post_content = ""
-        
-        for selector in content_selectors:
-            element = soup.select_one(selector)
-            if element:
-                post_content = element.get_text(separator=' ', strip=True)
+        # Look for title in the first few lines
+        for line in lines[:10]:
+            line = line.strip()
+            # Check for markdown title (# Title)
+            if line.startswith('# '):
+                title = line[2:].strip()
+                break
+            # Check for yaml frontmatter title
+            elif line.startswith('title:'):
+                title = line.replace('title:', '').strip().strip('"').strip("'")
                 break
         
-        # Fallback to body content if no specific content area found
-        if not post_content:
-            body = soup.find('body')
-            if body:
-                post_content = body.get_text(separator=' ', strip=True)
+        # Look for date in yaml frontmatter
+        for line in lines[:20]:
+            line = line.strip()
+            if line.startswith('date:'):
+                date = line.replace('date:', '').strip().strip('"').strip("'")
+                break
         
-        # Clean up whitespace
-        post_content = re.sub(r'\s+', ' ', post_content).strip()
+        # If no title found from markdown, use filename
+        if title == "Untitled":
+            title = file_info['name'].replace('.md', '').replace('-', ' ').replace('_', ' ').title()
         
-        # Extract date from time element or meta tags
-        date = None
-        time_elem = soup.find('time', {'datetime': True})
-        if time_elem:
-            date = time_elem.get('datetime')
-        else:
-            # Try meta tags
-            meta_date = soup.find('meta', {'property': 'article:published_time'})
-            if meta_date:
-                date = meta_date.get('content')
+        # Clean up content - remove excessive whitespace
+        content = re.sub(r'\n\s*\n', '\n\n', content).strip()
         
         # Limit content length to prevent memory issues
         max_content_length = 5000
-        content_text = post_content[:max_content_length] + "..." if len(post_content) > max_content_length else post_content
-        excerpt_text = post_content[:200] + "..." if len(post_content) > 200 else post_content
+        content_text = content[:max_content_length] + "..." if len(content) > max_content_length else content
+        excerpt_text = content[:200] + "..." if len(content) > 200 else content
         
         return BlogPost(
             title=title[:200],  # Limit title length
-            url=url,
+            url=file_info['html_url'],
             content=content_text,
             excerpt=excerpt_text,
             date=date
         )
         
     except InvalidURLError as e:
-        logger.error(f"URL validation error for {url}: {e}")
-        return BlogPost(title="Invalid URL", url=url, content=f"URL validation error: {str(e)}")
+        logger.error(f"URL validation error for {file_info.get('name', 'unknown')}: {e}")
+        return BlogPost(title="Invalid URL", url=file_info.get('html_url', ''), content=f"URL validation error: {str(e)}")
     except BlogFetchError as e:
-        logger.error(f"Fetch error for {url}: {e}")
-        return BlogPost(title="Error loading post", url=url, content=f"Fetch error: {str(e)}")
-    except BlogParseError as e:
-        logger.error(f"Parse error for {url}: {e}")
-        return BlogPost(title="Error parsing post", url=url, content=f"Parse error: {str(e)}")
+        logger.error(f"Fetch error for {file_info.get('name', 'unknown')}: {e}")
+        return BlogPost(title="Error loading post", url=file_info.get('html_url', ''), content=f"Fetch error: {str(e)}")
+    except Exception as e:
+        logger.error(f"Unexpected error extracting content from {file_info.get('name', 'unknown')}: {e}")
+        return BlogPost(title="Unexpected error", url=file_info.get('html_url', ''), content=f"Unexpected error: {str(e)}")
+
+
+async def extract_blog_content(url: str) -> BlogPost:
+    """Extract blog post content from a URL (backwards compatibility)."""
+    try:
+        # Try to find the file by URL
+        blog_files = await get_blog_posts()
+        for file_info in blog_files:
+            if file_info['html_url'] == url:
+                return await extract_blog_content_from_file(file_info)
+        
+        # If not found, return error
+        return BlogPost(title="Post not found", url=url, content="Blog post not found in GitHub repository")
+        
     except Exception as e:
         logger.error(f"Unexpected error extracting content from {url}: {e}")
         return BlogPost(title="Unexpected error", url=url, content=f"Unexpected error: {str(e)}")
@@ -305,10 +320,11 @@ async def handle_call_tool(name: str, arguments: dict[str, Any]) -> list[TextCon
             TextContent(
                 type="text",
                 text=f"""Blog Information:
-- URL: {BASE_URL}
-- Name: Igor's Blog
+- URL: {BLOG_URL}
+- Name: Igor's Blog  
 - Description: Personal blog by Igor Dvorkin covering technology, leadership, and life insights
-- This MCP server provides tools to interact with the blog content including reading posts, searching, and getting random posts.
+- Source: Markdown files from GitHub repository (idvorkin/idvorkin.github.io)
+- This MCP server provides tools to interact with the blog content by reading markdown files directly from GitHub.
 
 Available tools:
 - blog_info: Get this information
@@ -324,14 +340,14 @@ Available tools:
         include_content = arguments.get("include_content", True)
         
         try:
-            blog_urls = await get_blog_posts()
-            if not blog_urls:
+            blog_files = await get_blog_posts()
+            if not blog_files:
                 return [TextContent(type="text", text="No blog posts found.")]
             
-            random_url = random.choice(blog_urls)
+            random_file = random.choice(blog_files)
             
             if include_content:
-                blog_post = await extract_blog_content(random_url)
+                blog_post = await extract_blog_content_from_file(random_file)
                 return [
                     TextContent(
                         type="text",
@@ -350,7 +366,7 @@ Content:
                 return [
                     TextContent(
                         type="text",
-                        text=f"Random blog post URL: {random_url}"
+                        text=f"Random blog post URL: {random_file['html_url']}"
                     )
                 ]
                 
@@ -392,12 +408,12 @@ Content:
     
     elif name == "random_blog_url":
         try:
-            blog_urls = await get_blog_posts()
-            if not blog_urls:
+            blog_files = await get_blog_posts()
+            if not blog_files:
                 return [TextContent(type="text", text="No blog posts found.")]
             
-            random_url = random.choice(blog_urls)
-            return [TextContent(type="text", text=random_url)]
+            random_file = random.choice(blog_files)
+            return [TextContent(type="text", text=random_file['html_url'])]
             
         except Exception as e:
             return [TextContent(type="text", text=f"Error getting random blog URL: {str(e)}")]
@@ -422,15 +438,15 @@ Content:
         query = query.strip().lower()[:100]  # Limit query length
         
         try:
-            blog_urls = await get_blog_posts()
-            if not blog_urls:
+            blog_files = await get_blog_posts()
+            if not blog_files:
                 return [TextContent(type="text", text="No blog posts found.")]
             
             # Search through blog posts
             matching_posts = []
-            for url in blog_urls[:20]:  # Limit search to first 20 posts for performance
+            for file_info in blog_files[:20]:  # Limit search to first 20 posts for performance
                 try:
-                    blog_post = await extract_blog_content(url)
+                    blog_post = await extract_blog_content_from_file(file_info)
                     # Check if query matches title or content
                     if (query in blog_post.title.lower() or 
                         (blog_post.content and query in blog_post.content.lower())):
@@ -440,7 +456,7 @@ Content:
                         break
                         
                 except Exception as e:
-                    logger.warning(f"Error processing {url} for search: {e}")
+                    logger.warning(f"Error processing {file_info.get('name', 'unknown')} for search: {e}")
                     continue
             
             if not matching_posts:

@@ -20,11 +20,12 @@ from typing import Any, Optional
 from urllib.parse import urljoin, urlparse
 
 import httpx
+from bs4 import BeautifulSoup
 from mcp.server import Server
 from mcp.server.models import InitializationOptions
 from mcp.server.stdio import stdio_server
 from mcp.types import Resource, TextContent, Tool
-from pydantic import BaseModel, HttpUrl
+from pydantic import BaseModel, HttpUrl, validator
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -33,6 +34,22 @@ logger = logging.getLogger(__name__)
 # Server configuration
 server = Server("blog-mcp-server")
 BASE_URL = "https://idvork.in"
+ALLOWED_DOMAINS = {"idvork.in"}
+
+
+class BlogFetchError(Exception):
+    """Raised when blog content cannot be fetched."""
+    pass
+
+
+class BlogParseError(Exception):
+    """Raised when blog content cannot be parsed."""
+    pass
+
+
+class InvalidURLError(Exception):
+    """Raised when URL is invalid or not allowed."""
+    pass
 
 
 class BlogPost(BaseModel):
@@ -42,21 +59,64 @@ class BlogPost(BaseModel):
     content: Optional[str] = None
     excerpt: Optional[str] = None
     date: Optional[str] = None
+    
+    @validator('url')
+    def validate_url(cls, v):
+        """Validate that URL belongs to allowed domains."""
+        if isinstance(v, str):
+            parsed = urlparse(v)
+        else:
+            parsed = urlparse(str(v))
+        
+        if parsed.netloc not in ALLOWED_DOMAINS:
+            raise ValueError(f"URL domain {parsed.netloc} not allowed")
+        if parsed.scheme not in {"http", "https"}:
+            raise ValueError(f"URL scheme {parsed.scheme} not allowed")
+        return v
+
+
+def validate_blog_url(url: str) -> str:
+    """Validate that URL belongs to allowed domains and has valid scheme."""
+    if not url or not isinstance(url, str):
+        raise InvalidURLError("URL must be a non-empty string")
+    
+    try:
+        parsed = urlparse(url)
+    except Exception as e:
+        raise InvalidURLError(f"Invalid URL format: {e}")
+    
+    if parsed.netloc not in ALLOWED_DOMAINS:
+        raise InvalidURLError(f"Domain {parsed.netloc} not allowed. Allowed domains: {ALLOWED_DOMAINS}")
+    
+    if parsed.scheme not in {"http", "https"}:
+        raise InvalidURLError(f"Scheme {parsed.scheme} not allowed. Only http and https are allowed")
+    
+    return url
 
 
 async def fetch_url(url: str) -> str:
-    """Fetch content from a URL."""
+    """Fetch content from a validated URL."""
+    # Validate URL first
+    validated_url = validate_blog_url(url)
+    
     async with httpx.AsyncClient(timeout=30.0) as client:
         try:
-            response = await client.get(url)
+            response = await client.get(validated_url)
             response.raise_for_status()
-            return response.text
+            
+            # Limit response size to prevent memory issues
+            content = response.text
+            if len(content) > 1_000_000:  # 1MB limit
+                logger.warning(f"Content from {url} is very large ({len(content)} chars), truncating")
+                content = content[:1_000_000]
+            
+            return content
         except httpx.HTTPError as e:
             logger.error(f"HTTP error fetching {url}: {e}")
-            raise
+            raise BlogFetchError(f"Failed to fetch {url}: {e}")
         except Exception as e:
-            logger.error(f"Error fetching {url}: {e}")
-            raise
+            logger.error(f"Unexpected error fetching {url}: {e}")
+            raise BlogFetchError(f"Unexpected error fetching {url}: {e}")
 
 
 async def get_blog_posts() -> list[str]:
@@ -83,54 +143,82 @@ async def get_blog_posts() -> list[str]:
         
         return blog_urls[:50]  # Limit to 50 posts
         
+    except InvalidURLError as e:
+        logger.error(f"URL validation error getting blog posts: {e}")
+        return []
+    except BlogFetchError as e:
+        logger.error(f"Fetch error getting blog posts: {e}")
+        return []
     except Exception as e:
-        logger.error(f"Error getting blog posts: {e}")
+        logger.error(f"Unexpected error getting blog posts: {e}")
         return []
 
 
 async def extract_blog_content(url: str) -> BlogPost:
-    """Extract blog post content from a URL."""
+    """Extract blog post content from a URL using BeautifulSoup."""
     try:
         content = await fetch_url(url)
+        soup = BeautifulSoup(content, 'html.parser')
         
         # Extract title
-        title_match = re.search(r'<title>(.*?)</title>', content, re.IGNORECASE | re.DOTALL)
-        title = title_match.group(1).strip() if title_match else "Untitled"
+        title_elem = soup.find('title')
+        title = title_elem.get_text(strip=True) if title_elem else "Untitled"
         
-        # Extract main content (looking for common blog content containers)
-        content_patterns = [
-            r'<article[^>]*>(.*?)</article>',
-            r'<main[^>]*>(.*?)</main>',
-            r'<div[^>]*class="[^"]*content[^"]*"[^>]*>(.*?)</div>',
-            r'<div[^>]*class="[^"]*post[^"]*"[^>]*>(.*?)</div>',
-        ]
-        
+        # Extract main content using multiple fallback strategies
+        content_selectors = ['article', 'main', '.content', '.post', '#content', '.entry']
         post_content = ""
-        for pattern in content_patterns:
-            match = re.search(pattern, content, re.IGNORECASE | re.DOTALL)
-            if match:
-                post_content = match.group(1)
+        
+        for selector in content_selectors:
+            element = soup.select_one(selector)
+            if element:
+                post_content = element.get_text(separator=' ', strip=True)
                 break
         
-        # Clean up HTML tags for readable text
-        text_content = re.sub(r'<[^>]+>', '', post_content)
-        text_content = re.sub(r'\s+', ' ', text_content).strip()
+        # Fallback to body content if no specific content area found
+        if not post_content:
+            body = soup.find('body')
+            if body:
+                post_content = body.get_text(separator=' ', strip=True)
         
-        # Extract date if possible
-        date_match = re.search(r'<time[^>]*datetime="([^"]*)"', content, re.IGNORECASE)
-        date = date_match.group(1) if date_match else None
+        # Clean up whitespace
+        post_content = re.sub(r'\s+', ' ', post_content).strip()
+        
+        # Extract date from time element or meta tags
+        date = None
+        time_elem = soup.find('time', {'datetime': True})
+        if time_elem:
+            date = time_elem.get('datetime')
+        else:
+            # Try meta tags
+            meta_date = soup.find('meta', {'property': 'article:published_time'})
+            if meta_date:
+                date = meta_date.get('content')
+        
+        # Limit content length to prevent memory issues
+        max_content_length = 5000
+        content_text = post_content[:max_content_length] + "..." if len(post_content) > max_content_length else post_content
+        excerpt_text = post_content[:200] + "..." if len(post_content) > 200 else post_content
         
         return BlogPost(
-            title=title,
+            title=title[:200],  # Limit title length
             url=url,
-            content=text_content[:2000] + "..." if len(text_content) > 2000 else text_content,
-            excerpt=text_content[:200] + "..." if len(text_content) > 200 else text_content,
+            content=content_text,
+            excerpt=excerpt_text,
             date=date
         )
         
+    except InvalidURLError as e:
+        logger.error(f"URL validation error for {url}: {e}")
+        return BlogPost(title="Invalid URL", url=url, content=f"URL validation error: {str(e)}")
+    except BlogFetchError as e:
+        logger.error(f"Fetch error for {url}: {e}")
+        return BlogPost(title="Error loading post", url=url, content=f"Fetch error: {str(e)}")
+    except BlogParseError as e:
+        logger.error(f"Parse error for {url}: {e}")
+        return BlogPost(title="Error parsing post", url=url, content=f"Parse error: {str(e)}")
     except Exception as e:
-        logger.error(f"Error extracting content from {url}: {e}")
-        return BlogPost(title="Error loading post", url=url, content=f"Error: {str(e)}")
+        logger.error(f"Unexpected error extracting content from {url}: {e}")
+        return BlogPost(title="Unexpected error", url=url, content=f"Unexpected error: {str(e)}")
 
 
 @server.list_tools()
@@ -274,8 +362,12 @@ Content:
         if not url:
             return [TextContent(type="text", text="Error: URL parameter is required")]
         
+        # Validate URL format and type
+        if not isinstance(url, str) or len(url.strip()) == 0:
+            return [TextContent(type="text", text="Error: URL must be a non-empty string")]
+        
         try:
-            blog_post = await extract_blog_content(url)
+            blog_post = await extract_blog_content(url.strip())
             return [
                 TextContent(
                     type="text",
@@ -290,8 +382,13 @@ Content:
 """
                 )
             ]
-        except Exception as e:
+        except InvalidURLError as e:
+            return [TextContent(type="text", text=f"Invalid URL: {str(e)}")]
+        except (BlogFetchError, BlogParseError) as e:
             return [TextContent(type="text", text=f"Error reading blog post: {str(e)}")]
+        except Exception as e:
+            logger.error(f"Unexpected error in read_blog_post: {e}")
+            return [TextContent(type="text", text="An unexpected error occurred while reading the blog post")]
     
     elif name == "random_blog_url":
         try:
@@ -306,11 +403,23 @@ Content:
             return [TextContent(type="text", text=f"Error getting random blog URL: {str(e)}")]
     
     elif name == "blog_search":
-        query = arguments.get("query", "").lower()
+        query = arguments.get("query", "")
         limit = arguments.get("limit", 5)
         
-        if not query:
-            return [TextContent(type="text", text="Error: Search query is required")]
+        # Validate query parameter
+        if not query or not isinstance(query, str) or len(query.strip()) == 0:
+            return [TextContent(type="text", text="Error: Search query is required and must be a non-empty string")]
+        
+        # Validate and sanitize limit
+        try:
+            limit = int(limit)
+            if limit < 1 or limit > 20:
+                limit = min(max(limit, 1), 20)  # Clamp between 1 and 20
+        except (ValueError, TypeError):
+            limit = 5  # Default fallback
+        
+        # Sanitize query (basic protection against injection)
+        query = query.strip().lower()[:100]  # Limit query length
         
         try:
             blog_urls = await get_blog_posts()

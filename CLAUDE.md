@@ -16,9 +16,16 @@ This is a Blog MCP Server built with FastMCP that provides tools for interacting
 - Use type hints for automatic schema generation
 
 ## Development Commands
-- Run tests: `python -m pytest test_blog_mcp_e2e.py -v`
 - Install dependencies: `pip install -r requirements.txt` 
+- Run full test suite: `python -m pytest test_blog_mcp_e2e.py -v`
+- Run basic validation: `python run_simple_tests.py` (works without pytest)
 - Run the server: `python blog_mcp_server.py`
+
+## Testing Strategy
+- **Unit Tests**: Mock GitHub API responses for isolated testing
+- **E2E Tests**: Can rely on GitHub API being available (idvorkin/idvorkin.github.io repo)
+- **GitHub Dependency**: Tests assume GitHub API is accessible and the blog repository exists
+- **Network Tests**: Some tests verify actual GitHub API integration for real-world validation
 
 ## Code Style
 - Follow PEP 8 Python style guidelines

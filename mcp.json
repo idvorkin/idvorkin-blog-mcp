@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "blog": {
+      "command": "python",
+      "args": ["blog_mcp_server.py"],
+      "env": {}
+    }
+  }
+}

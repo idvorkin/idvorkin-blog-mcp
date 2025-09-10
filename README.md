@@ -1,6 +1,13 @@
 # Blog MCP Server
 
-A Model Context Protocol (MCP) server that provides tools for interacting with Igor's blog at [idvork.in](https://idvork.in).
+A FastMCP server that provides tools for interacting with Igor's blog at [idvork.in](https://idvork.in). Built with FastMCP 2.0 for automatic tool registration and protocol handling.
+
+## Architecture
+
+- **FastMCP 2.0**: High-level Python framework that handles all MCP protocol details
+- **GitHub Source**: Reads markdown files directly from the `idvorkin/idvorkin.github.io` repository 
+- **Simple Tools**: Each tool is just a decorated Python function - no manual protocol implementation
+- **Type Safety**: Automatic schema generation from Python type hints
 
 ## Features
 

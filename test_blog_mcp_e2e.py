@@ -20,17 +20,16 @@ import httpx
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from blog_mcp_server import (
-    BlogPost,
-    BlogFetchError,
-    BlogParseError,
-    InvalidURLError,
-    extract_blog_content,
+    BlogError,
+    blog_info,
+    random_blog,
+    read_blog_post,
+    random_blog_url,
+    blog_search,
     fetch_url,
-    get_blog_posts,
-    handle_call_tool,
-    handle_list_tools,
-    server,
-    validate_blog_url,
+    get_blog_files,
+    parse_markdown_content,
+    mcp,
 )
 
 
@@ -38,552 +37,295 @@ class TestBlogMCPServer:
     """Test suite for Blog MCP Server functionality."""
 
     @pytest.fixture
-    def mock_html_content(self):
-        """Mock HTML content for testing content extraction."""
-        return """
-        <html>
-        <head>
-            <title>Test Blog Post Title</title>
-        </head>
-        <body>
-            <article>
-                <time datetime="2024-01-15T10:00:00Z">January 15, 2024</time>
-                <h1>Test Blog Post</h1>
-                <p>This is a test blog post content with some interesting insights about technology.</p>
-                <p>More content here with <a href="#">links</a> and formatting.</p>
-            </article>
-        </body>
-        </html>
-        """
+    def mock_markdown_content(self):
+        """Mock markdown content for testing content extraction."""
+        return """---
+title: Test Blog Post Title
+date: 2024-01-15
+---
+
+# Test Blog Post Title
+
+This is a sample blog post content for testing purposes.
+It contains multiple paragraphs and should be properly parsed.
+
+## Section Header
+
+More content here with some **bold text** and *italic text*.
+
+The content should be properly extracted and formatted.
+"""
 
     @pytest.fixture
-    def mock_sitemap_content(self):
-        """Mock sitemap XML content for testing blog post discovery."""
-        return """<?xml version="1.0" encoding="UTF-8"?>
-        <urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
-            <url>
-                <loc>https://idvork.in/posts/test-post-1</loc>
-                <lastmod>2024-01-15</lastmod>
-            </url>
-            <url>
-                <loc>https://idvork.in/posts/test-post-2</loc>
-                <lastmod>2024-01-14</lastmod>
-            </url>
-            <url>
-                <loc>https://idvork.in/about</loc>
-                <lastmod>2024-01-10</lastmod>
-            </url>
-        </urlset>
-        """
+    def mock_github_response(self):
+        """Mock GitHub API response for file listing."""
+        return json.dumps([
+            {
+                "name": "test-post.md",
+                "path": "_d/test-post.md", 
+                "type": "file",
+                "download_url": "https://raw.githubusercontent.com/idvorkin/idvorkin.github.io/master/_d/test-post.md",
+                "size": 1024
+            },
+            {
+                "name": "another-post.md",
+                "path": "_d/another-post.md",
+                "type": "file", 
+                "download_url": "https://raw.githubusercontent.com/idvorkin/idvorkin.github.io/master/_d/another-post.md",
+                "size": 2048
+            },
+            {
+                "name": "README.md",
+                "path": "_d/README.md",
+                "type": "file",
+                "download_url": "https://raw.githubusercontent.com/idvorkin/idvorkin.github.io/master/_d/README.md",
+                "size": 512
+            }
+        ])
+
+    def test_blog_info(self):
+        """Test the blog_info tool."""
+        result = blog_info()
+        assert "Igor's Blog" in result
+        assert "https://idvork.in" in result
+        assert "GitHub repository" in result
+        assert "Available tools:" in result
 
     @pytest.mark.asyncio
-    async def test_list_tools(self):
-        """Test that all 5 tools are properly listed."""
-        tools = await handle_list_tools()
-        
-        assert len(tools) == 5
-        tool_names = {tool.name for tool in tools}
-        expected_tools = {
-            "blog_info",
-            "random_blog",
-            "read_blog_post",
-            "random_blog_url",
-            "blog_search"
-        }
-        assert tool_names == expected_tools
-        
-        # Verify each tool has required properties
-        for tool in tools:
-            assert hasattr(tool, 'name')
-            assert hasattr(tool, 'description')
-            assert hasattr(tool, 'inputSchema')
-            assert tool.description  # Non-empty description
-
-    @pytest.mark.asyncio
-    async def test_blog_info_tool(self):
-        """Test blog_info tool returns correct information."""
-        result = await handle_call_tool("blog_info", {})
-        
-        assert len(result) == 1
-        content = result[0].text
-        assert "https://idvork.in" in content
-        assert "Igor's Blog" in content
-        assert "blog_info" in content
-        assert "random_blog" in content
-        assert "read_blog_post" in content
-        assert "random_blog_url" in content
-        assert "blog_search" in content
-
-    @pytest.mark.asyncio
-    async def test_validate_blog_url_valid(self):
-        """Test URL validation with valid URLs."""
-        valid_urls = [
-            "https://idvork.in/posts/test",
-            "http://idvork.in/about",
-            "https://idvork.in/"
-        ]
-        
-        for url in valid_urls:
-            result = validate_blog_url(url)
-            assert result == url
-    
-    def test_validate_blog_url_invalid_domain(self):
-        """Test URL validation rejects invalid domains."""
-        invalid_urls = [
-            "https://evil.com/steal-data",
-            "http://localhost:8080/admin",
-            "https://192.168.1.1/config"
-        ]
-        
-        for url in invalid_urls:
-            with pytest.raises(InvalidURLError, match="not allowed"):
-                validate_blog_url(url)
-    
-    def test_validate_blog_url_invalid_scheme(self):
-        """Test URL validation rejects invalid schemes."""
-        invalid_urls = [
-            "ftp://idvork.in/file",
-            "file:///etc/passwd",
-            "javascript:alert('xss')"
-        ]
-        
-        for url in invalid_urls:
-            with pytest.raises(InvalidURLError, match="not allowed"):
-                validate_blog_url(url)
-    
-    def test_validate_blog_url_invalid_format(self):
-        """Test URL validation with invalid formats."""
-        invalid_inputs = [
-            "",
-            None,
-            "not-a-url",
-            "://missing-scheme"
-        ]
-        
-        for invalid_input in invalid_inputs:
-            with pytest.raises(InvalidURLError):
-                validate_blog_url(invalid_input)
-    
-    @pytest.mark.asyncio
-    async def test_fetch_url_success(self):
+    async def test_fetch_url_success(self, mock_markdown_content):
         """Test successful URL fetching."""
         with patch('httpx.AsyncClient') as mock_client:
-            mock_response = MagicMock()
-            mock_response.text = "Test content"
-            mock_response.raise_for_status = MagicMock()
+            mock_response = AsyncMock()
+            mock_response.text = mock_markdown_content
+            mock_response.raise_for_status = AsyncMock()
             
-            mock_client.return_value.__aenter__.return_value.get = AsyncMock(return_value=mock_response)
+            mock_client.return_value.__aenter__.return_value.get.return_value = mock_response
             
-            result = await fetch_url("https://example.com")
-            assert result == "Test content"
+            result = await fetch_url("https://example.com/test.md")
+            assert result == mock_markdown_content
 
     @pytest.mark.asyncio
     async def test_fetch_url_http_error(self):
         """Test URL fetching with HTTP error."""
         with patch('httpx.AsyncClient') as mock_client:
-            mock_response = MagicMock()
-            mock_response.raise_for_status.side_effect = httpx.HTTPStatusError(
-                "404 Not Found", request=MagicMock(), response=MagicMock()
-            )
+            mock_response = AsyncMock()
+            mock_response.raise_for_status.side_effect = httpx.HTTPError("404 Not Found")
             
-            mock_client.return_value.__aenter__.return_value.get = AsyncMock(return_value=mock_response)
+            mock_client.return_value.__aenter__.return_value.get.return_value = mock_response
             
-            with pytest.raises(BlogFetchError):
-                await fetch_url("https://idvork.in/not-found")
-    
+            with pytest.raises(BlogError):
+                await fetch_url("https://example.com/nonexistent.md")
+
     @pytest.mark.asyncio
-    async def test_fetch_url_invalid_domain(self):
-        """Test URL fetching with invalid domain."""
-        with pytest.raises(InvalidURLError):
-            await fetch_url("https://evil.com/steal-data")
-    
+    async def test_get_blog_files(self, mock_github_response):
+        """Test getting blog files from GitHub."""
+        with patch('blog_mcp_server.fetch_url') as mock_fetch:
+            mock_fetch.return_value = mock_github_response
+            
+            files = await get_blog_files()
+            assert len(files) == 3
+            assert files[0]['name'] == 'test-post.md'
+            assert 'html_url' in files[0]
+            assert files[0]['html_url'] == 'https://idvork.in/test-post'
+
     @pytest.mark.asyncio
-    async def test_fetch_url_large_content(self):
-        """Test URL fetching with large content gets truncated."""
-        large_content = "x" * 2_000_000  # 2MB content
+    async def test_parse_markdown_content(self, mock_markdown_content):
+        """Test parsing markdown content."""
+        file_info = {
+            'name': 'test-post.md',
+            'download_url': 'https://example.com/test.md',
+            'html_url': 'https://idvork.in/test-post'
+        }
         
-        with patch('httpx.AsyncClient') as mock_client:
-            mock_response = MagicMock()
-            mock_response.text = large_content
-            mock_response.raise_for_status = MagicMock()
+        with patch('blog_mcp_server.fetch_url') as mock_fetch:
+            mock_fetch.return_value = mock_markdown_content
             
-            mock_client.return_value.__aenter__.return_value.get = AsyncMock(return_value=mock_response)
-            
-            result = await fetch_url("https://idvork.in/large-post")
-            assert len(result) == 1_000_000  # Should be truncated
+            result = await parse_markdown_content(file_info)
+            assert result['title'] == 'Test Blog Post Title'
+            assert result['date'] == '2024-01-15'
+            assert 'sample blog post' in result['content']
+            assert len(result['excerpt']) <= 203  # 200 chars + "..."
 
     @pytest.mark.asyncio
-    async def test_extract_blog_content(self, mock_html_content):
-        """Test blog content extraction from HTML with BeautifulSoup."""
-        with patch('blog_mcp_server.fetch_url', return_value=mock_html_content):
-            result = await extract_blog_content("https://idvork.in/post")
+    async def test_random_blog_with_content(self, mock_github_response, mock_markdown_content):
+        """Test random_blog tool with content."""
+        with patch('blog_mcp_server.get_blog_files') as mock_get_files, \
+             patch('blog_mcp_server.parse_markdown_content') as mock_parse:
             
-            assert result.title == "Test Blog Post Title"
-            assert result.url == "https://idvork.in/post"
-            assert result.date == "2024-01-15T10:00:00Z"
-            assert "test blog post content" in result.content.lower()
-            assert "technology" in result.content.lower()
-            # BeautifulSoup should clean HTML tags properly
-            assert "<p>" not in result.content
-            assert "<a " not in result.content
-
-    @pytest.mark.asyncio
-    async def test_get_blog_posts_from_sitemap(self, mock_sitemap_content):
-        """Test getting blog posts from sitemap."""
-        with patch('blog_mcp_server.fetch_url', return_value=mock_sitemap_content):
-            result = await get_blog_posts()
-            
-            expected_urls = [
-                "https://idvork.in/posts/test-post-1",
-                "https://idvork.in/posts/test-post-2"
+            mock_get_files.return_value = [
+                {'name': 'test.md', 'html_url': 'https://idvork.in/test'}
             ]
-            assert result == expected_urls
+            mock_parse.return_value = {
+                'title': 'Test Post',
+                'url': 'https://idvork.in/test',
+                'date': '2024-01-15',
+                'content': 'Test content'
+            }
+            
+            result = await random_blog(include_content=True)
+            assert "Random Blog Post:" in result
+            assert "Test Post" in result
+            assert "Test content" in result
 
     @pytest.mark.asyncio
-    async def test_get_blog_posts_fallback(self):
-        """Test getting blog posts when sitemap fails."""
-        main_page_content = """
-        <html>
-        <body>
-            <a href="/posts/post-1">Post 1</a>
-            <a href="/posts/post-2">Post 2</a>
-            <a href="/about">About</a>
-        </body>
-        </html>
-        """
-        
-        def mock_fetch(url):
-            if "sitemap.xml" in url:
-                raise httpx.HTTPError("Sitemap not found")
-            return main_page_content
-        
-        with patch('blog_mcp_server.fetch_url', side_effect=mock_fetch):
-            result = await get_blog_posts()
-            
-            expected_urls = [
-                "https://idvork.in/posts/post-1",
-                "https://idvork.in/posts/post-2"
-            ]
-            assert result == expected_urls
-
-    @pytest.mark.asyncio
-    async def test_random_blog_with_content(self, mock_html_content):
-        """Test random_blog tool with content included."""
-        mock_urls = ["https://idvork.in/posts/test-post-1"]
-        
-        with patch('blog_mcp_server.get_blog_posts', return_value=mock_urls), \
-             patch('blog_mcp_server.fetch_url', return_value=mock_html_content):
-            
-            result = await handle_call_tool("random_blog", {"include_content": True})
-            
-            assert len(result) == 1
-            content = result[0].text
-            assert "Random Blog Post:" in content
-            assert "Test Blog Post Title" in content
-            assert "https://idvork.in/posts/test-post-1" in content
-            assert "technology" in content.lower()
-
-    @pytest.mark.asyncio
-    async def test_random_blog_without_content(self):
+    async def test_random_blog_without_content(self, mock_github_response):
         """Test random_blog tool without content."""
-        mock_urls = ["https://idvork.in/posts/test-post-1"]
-        
-        with patch('blog_mcp_server.get_blog_posts', return_value=mock_urls):
-            result = await handle_call_tool("random_blog", {"include_content": False})
+        with patch('blog_mcp_server.get_blog_files') as mock_get_files:
+            mock_get_files.return_value = [
+                {'name': 'test.md', 'html_url': 'https://idvork.in/test'}
+            ]
             
-            assert len(result) == 1
-            content = result[0].text
-            assert "https://idvork.in/posts/test-post-1" in content
-            assert "Random Blog Post:" not in content
+            result = await random_blog(include_content=False)
+            assert "Random blog post URL:" in result
+            assert "https://idvork.in/test" in result
 
     @pytest.mark.asyncio
-    async def test_random_blog_no_posts(self):
-        """Test random_blog tool when no posts are found."""
-        with patch('blog_mcp_server.get_blog_posts', return_value=[]):
-            result = await handle_call_tool("random_blog", {})
+    async def test_random_blog_url(self, mock_github_response):
+        """Test random_blog_url tool."""
+        with patch('blog_mcp_server.get_blog_files') as mock_get_files:
+            mock_get_files.return_value = [
+                {'name': 'test.md', 'html_url': 'https://idvork.in/test'}
+            ]
             
-            assert len(result) == 1
-            assert "No blog posts found" in result[0].text
+            result = await random_blog_url()
+            assert result == 'https://idvork.in/test'
 
     @pytest.mark.asyncio
-    async def test_read_blog_post_success(self, mock_html_content):
+    async def test_read_blog_post_success(self, mock_github_response, mock_markdown_content):
         """Test read_blog_post tool with valid URL."""
-        test_url = "https://idvork.in/posts/test-post"
-        
-        with patch('blog_mcp_server.fetch_url', return_value=mock_html_content):
-            result = await handle_call_tool("read_blog_post", {"url": test_url})
+        with patch('blog_mcp_server.get_blog_files') as mock_get_files, \
+             patch('blog_mcp_server.parse_markdown_content') as mock_parse:
             
-            assert len(result) == 1
-            content = result[0].text
-            assert "Blog Post:" in content
-            assert "Test Blog Post Title" in content
-            assert test_url in content
-            assert "technology" in content.lower()
+            mock_get_files.return_value = [
+                {'html_url': 'https://idvork.in/test-post'}
+            ]
+            mock_parse.return_value = {
+                'title': 'Test Post',
+                'url': 'https://idvork.in/test-post',
+                'date': '2024-01-15',
+                'content': 'Test content'
+            }
+            
+            result = await read_blog_post('https://idvork.in/test-post')
+            assert "Blog Post:" in result
+            assert "Test Post" in result
 
     @pytest.mark.asyncio
-    async def test_read_blog_post_missing_url(self):
-        """Test read_blog_post tool with missing URL parameter."""
-        result = await handle_call_tool("read_blog_post", {})
-        
-        assert len(result) == 1
-        assert "URL parameter is required" in result[0].text
-    
-    @pytest.mark.asyncio
-    async def test_read_blog_post_invalid_url(self):
-        """Test read_blog_post tool with invalid URL."""
-        result = await handle_call_tool("read_blog_post", {"url": "https://evil.com/steal"})
-        
-        assert len(result) == 1
-        assert "Invalid URL" in result[0].text
-    
-    @pytest.mark.asyncio
-    async def test_read_blog_post_empty_url(self):
-        """Test read_blog_post tool with empty URL."""
-        result = await handle_call_tool("read_blog_post", {"url": ""})
-        
-        assert len(result) == 1
-        assert "must be a non-empty string" in result[0].text
-    
-    @pytest.mark.asyncio
-    async def test_read_blog_post_non_string_url(self):
-        """Test read_blog_post tool with non-string URL."""
-        result = await handle_call_tool("read_blog_post", {"url": 123})
-        
-        assert len(result) == 1
-        assert "must be a non-empty string" in result[0].text
+    async def test_read_blog_post_not_found(self):
+        """Test read_blog_post tool with non-existent URL."""
+        with patch('blog_mcp_server.get_blog_files') as mock_get_files:
+            mock_get_files.return_value = []
+            
+            result = await read_blog_post('https://idvork.in/nonexistent')
+            assert "not found" in result
 
     @pytest.mark.asyncio
-    async def test_read_blog_post_error(self):
-        """Test read_blog_post tool with fetch error."""
-        test_url = "https://idvork.in/posts/nonexistent"
-        
-        with patch('blog_mcp_server.fetch_url', side_effect=httpx.HTTPError("Not found")):
-            result = await handle_call_tool("read_blog_post", {"url": test_url})
-            
-            assert len(result) == 1
-            content = result[0].text
-            assert "Error reading blog post" in content
+    async def test_read_blog_post_invalid_input(self):
+        """Test read_blog_post tool with invalid input."""
+        result = await read_blog_post("")
+        assert "Error:" in result
+        assert "non-empty string" in result
 
     @pytest.mark.asyncio
-    async def test_random_blog_url_success(self):
-        """Test random_blog_url tool returns a URL."""
-        mock_urls = [
-            "https://idvork.in/posts/test-post-1",
-            "https://idvork.in/posts/test-post-2"
-        ]
-        
-        with patch('blog_mcp_server.get_blog_posts', return_value=mock_urls):
-            result = await handle_call_tool("random_blog_url", {})
+    async def test_blog_search_success(self, mock_github_response, mock_markdown_content):
+        """Test blog_search tool with matching results."""
+        with patch('blog_mcp_server.get_blog_files') as mock_get_files, \
+             patch('blog_mcp_server.parse_markdown_content') as mock_parse:
             
-            assert len(result) == 1
-            url = result[0].text.strip()
-            assert url in mock_urls
+            mock_get_files.return_value = [
+                {'name': 'test.md', 'html_url': 'https://idvork.in/test'}
+            ]
+            mock_parse.return_value = {
+                'title': 'Test Post About Python',
+                'url': 'https://idvork.in/test',
+                'content': 'This post discusses Python programming',
+                'excerpt': 'This post discusses...'
+            }
+            
+            result = await blog_search('python')
+            assert "Found 1 blog posts" in result
+            assert "Test Post About Python" in result
 
     @pytest.mark.asyncio
-    async def test_random_blog_url_no_posts(self):
-        """Test random_blog_url tool when no posts are available."""
-        with patch('blog_mcp_server.get_blog_posts', return_value=[]):
-            result = await handle_call_tool("random_blog_url", {})
-            
-            assert len(result) == 1
-            assert "No blog posts found" in result[0].text
-
-    @pytest.mark.asyncio
-    async def test_blog_search_success(self, mock_html_content):
-        """Test blog_search tool with successful search."""
-        mock_urls = [
-            "https://idvork.in/posts/tech-post",
-            "https://idvork.in/posts/other-post"
-        ]
-        
-        with patch('blog_mcp_server.get_blog_posts', return_value=mock_urls), \
-             patch('blog_mcp_server.fetch_url', return_value=mock_html_content):
-            
-            result = await handle_call_tool("blog_search", {
-                "query": "technology",
-                "limit": 5
-            })
-            
-            assert len(result) == 1
-            content = result[0].text
-            assert "Found" in content
-            assert "technology" in content
-            assert "Test Blog Post Title" in content
-
-    @pytest.mark.asyncio
-    async def test_blog_search_no_results(self, mock_html_content):
+    async def test_blog_search_no_results(self):
         """Test blog_search tool with no matching results."""
-        mock_urls = ["https://idvork.in/posts/test-post"]
-        
-        # Mock content that doesn't match search query
-        non_matching_content = mock_html_content.replace("technology", "science")
-        
-        with patch('blog_mcp_server.get_blog_posts', return_value=mock_urls), \
-             patch('blog_mcp_server.fetch_url', return_value=non_matching_content):
+        with patch('blog_mcp_server.get_blog_files') as mock_get_files, \
+             patch('blog_mcp_server.parse_markdown_content') as mock_parse:
             
-            result = await handle_call_tool("blog_search", {
-                "query": "technology",
-                "limit": 5
-            })
+            mock_get_files.return_value = [
+                {'name': 'test.md', 'html_url': 'https://idvork.in/test'}
+            ]
+            mock_parse.return_value = {
+                'title': 'Unrelated Post',
+                'content': 'This is about something else',
+                'excerpt': 'This is about...'
+            }
             
-            assert len(result) == 1
-            content = result[0].text
-            assert "No blog posts found matching 'technology'" in content
+            result = await blog_search('nonexistent')
+            assert "No blog posts found matching" in result
 
     @pytest.mark.asyncio
-    async def test_blog_search_missing_query(self):
-        """Test blog_search tool with missing query parameter."""
-        result = await handle_call_tool("blog_search", {})
-        
-        assert len(result) == 1
-        assert "Search query is required" in result[0].text
-    
-    @pytest.mark.asyncio
-    async def test_blog_search_empty_query(self):
-        """Test blog_search tool with empty query."""
-        result = await handle_call_tool("blog_search", {"query": ""})
-        
-        assert len(result) == 1
-        assert "Search query is required" in result[0].text
-    
-    @pytest.mark.asyncio
-    async def test_blog_search_non_string_query(self):
-        """Test blog_search tool with non-string query."""
-        result = await handle_call_tool("blog_search", {"query": 123})
-        
-        assert len(result) == 1
-        assert "Search query is required" in result[0].text
-    
-    @pytest.mark.asyncio
-    async def test_blog_search_invalid_limit(self):
-        """Test blog_search tool with invalid limit values."""
-        mock_urls = ["https://idvork.in/posts/test-post"]
-        
-        with patch('blog_mcp_server.get_blog_posts', return_value=mock_urls), \
-             patch('blog_mcp_server.extract_blog_content') as mock_extract:
-            
-            mock_extract.return_value = BlogPost(
-                title="Test", 
-                url="https://idvork.in/posts/test", 
-                content="test content",
-                excerpt="test"
-            )
-            
-            # Test negative limit
-            result = await handle_call_tool("blog_search", {"query": "test", "limit": -1})
-            assert len(result) == 1
-            # Should clamp to minimum 1
-            
-            # Test excessive limit
-            result = await handle_call_tool("blog_search", {"query": "test", "limit": 100})
-            assert len(result) == 1
-            # Should clamp to maximum 20
-            
-            # Test string limit
-            result = await handle_call_tool("blog_search", {"query": "test", "limit": "invalid"})
-            assert len(result) == 1
-            # Should use default 5
+    async def test_blog_search_invalid_query(self):
+        """Test blog_search tool with invalid query."""
+        result = await blog_search("")
+        assert "Error:" in result
+        assert "required" in result
 
     @pytest.mark.asyncio
-    async def test_blog_search_with_limit(self, mock_html_content):
-        """Test blog_search tool respects limit parameter."""
-        mock_urls = [f"https://idvork.in/posts/post-{i}" for i in range(10)]
-        
-        with patch('blog_mcp_server.get_blog_posts', return_value=mock_urls), \
-             patch('blog_mcp_server.fetch_url', return_value=mock_html_content):
+    async def test_blog_search_limit_validation(self, mock_github_response):
+        """Test blog_search tool limit parameter validation."""
+        with patch('blog_mcp_server.get_blog_files') as mock_get_files:
+            mock_get_files.return_value = []
             
-            result = await handle_call_tool("blog_search", {
-                "query": "technology",
-                "limit": 2
-            })
+            # Test with limit too high (should be clamped to 20)
+            result = await blog_search('test', limit=100)
+            assert "No blog posts found" in result
             
-            assert len(result) == 1
-            content = result[0].text
-            # Should find exactly 2 posts
-            lines = content.split('\n')
-            post_lines = [line for line in lines if line.strip().startswith(('1.', '2.'))]
-            assert len(post_lines) == 2
+            # Test with limit too low (should be clamped to 1) 
+            result = await blog_search('test', limit=-5)
+            assert "No blog posts found" in result
 
     @pytest.mark.asyncio
-    async def test_unknown_tool(self):
-        """Test calling an unknown tool."""
-        result = await handle_call_tool("unknown_tool", {})
-        
-        assert len(result) == 1
-        assert "Unknown tool: unknown_tool" in result[0].text
-
-    def test_blog_post_model(self):
-        """Test BlogPost model validation."""
-        # Valid blog post with allowed domain
-        post = BlogPost(
-            title="Test Post",
-            url="https://idvork.in/post",
-            content="Test content",
-            excerpt="Test excerpt",
-            date="2024-01-15"
-        )
-        
-        assert post.title == "Test Post"
-        assert str(post.url) == "https://idvork.in/post"
-        assert post.content == "Test content"
-        assert post.excerpt == "Test excerpt"
-        assert post.date == "2024-01-15"
-
-    @pytest.mark.asyncio
-    async def test_extract_blog_content_error_handling(self):
-        """Test extract_blog_content handles errors gracefully."""
-        with patch('blog_mcp_server.fetch_url', side_effect=BlogFetchError("Network error")):
-            result = await extract_blog_content("https://idvork.in/post")
+    async def test_error_handling_network_failure(self):
+        """Test error handling when network requests fail."""
+        with patch('blog_mcp_server.fetch_url') as mock_fetch:
+            mock_fetch.side_effect = BlogError("Network error")
             
-            assert result.title == "Error loading post"
-            assert "Fetch error: Network error" in result.content
-    
+            result = await random_blog()
+            assert "Error getting random blog post" in result
+
     @pytest.mark.asyncio
-    async def test_extract_blog_content_invalid_url(self):
-        """Test extract_blog_content with invalid URL."""
-        result = await extract_blog_content("https://evil.com/post")
+    async def test_content_size_limits(self):
+        """Test that content size limits are respected."""
+        large_content = "A" * 10000  # Large content
+        file_info = {
+            'name': 'large-post.md',
+            'download_url': 'https://example.com/large.md',
+            'html_url': 'https://idvork.in/large-post'
+        }
         
-        assert result.title == "Invalid URL"
-        assert "URL validation error" in result.content
-    
-    def test_blog_post_model_url_validation(self):
-        """Test BlogPost model validates URLs."""
-        # Valid URL should work
-        post = BlogPost(
-            title="Test",
-            url="https://idvork.in/post",
-            content="Test content"
-        )
-        assert str(post.url) == "https://idvork.in/post"
+        with patch('blog_mcp_server.fetch_url') as mock_fetch:
+            mock_fetch.return_value = large_content
+            
+            result = await parse_markdown_content(file_info)
+            # Content should be truncated to 5000 chars + "..."
+            assert len(result['content']) <= 5003
+            assert result['content'].endswith('...')
+
+    def test_fastmcp_server_instance(self):
+        """Test that FastMCP server is properly configured."""
+        assert mcp.name == "blog-mcp-server"
         
-        # Invalid domain should raise validation error
-        with pytest.raises(Exception):  # Pydantic ValidationError
-            BlogPost(
-                title="Test",
-                url="https://evil.com/post",
-                content="Test content"
-            )
-
-
-def run_tests():
-    """Run the test suite."""
-    print("Running Blog MCP Server E2E Tests...")
-    
-    # Run pytest with verbose output
-    exit_code = pytest.main([
-        __file__,
-        "-v",
-        "--tb=short",
-        "--asyncio-mode=auto"
-    ])
-    
-    if exit_code == 0:
-        print("✅ All tests passed!")
-    else:
-        print("❌ Some tests failed!")
-    
-    return exit_code
+        # Test that tools are registered
+        tools = []
+        for name, func in mcp._tools.items():
+            tools.append(name)
+        
+        expected_tools = ['blog_info', 'random_blog', 'read_blog_post', 'random_blog_url', 'blog_search']
+        for expected_tool in expected_tools:
+            assert expected_tool in tools
 
 
 if __name__ == "__main__":
-    exit(run_tests())
+    # Run tests
+    pytest.main([__file__, "-v"])

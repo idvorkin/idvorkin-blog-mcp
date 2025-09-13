@@ -13,7 +13,7 @@ import pytest
 from fastmcp import Client
 
 # Server endpoints
-LOCAL_ENDPOINT = "http://localhost:8000"
+LOCAL_ENDPOINT = "http://localhost:8000/mcp"
 PRODUCTION_ENDPOINT = "https://idvorkin-blog-mcp.fastmcp.app/mcp"
 
 

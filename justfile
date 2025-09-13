@@ -30,7 +30,7 @@ test-integration:
 test-e2e:
     @echo "🏠 Running E2E tests against LOCAL server..."
     @echo "   Make sure local server is running: just serve-http"
-    MCP_SERVER_ENDPOINT="http://localhost:8000" uv run pytest test_production_e2e.py -v --tb=short -n auto
+    MCP_SERVER_ENDPOINT="http://localhost:8000/mcp" uv run pytest test_production_e2e.py -v --tb=short -n auto
 
 # Run E2E tests against production server
 test-prod:

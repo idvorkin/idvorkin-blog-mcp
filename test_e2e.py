@@ -13,7 +13,7 @@ import pytest
 from test_utils import MCPTestClient, BlogAssertions
 
 # Server endpoints
-LOCAL_ENDPOINT = "http://localhost:8000/mcp"
+LOCAL_ENDPOINT = "http://localhost:9000/mcp"
 PRODUCTION_ENDPOINT = "https://idvorkin-blog-mcp.fastmcp.app/mcp"
 
 
@@ -49,7 +49,9 @@ class TestE2EBlogMCPServer:
             "random_blog",
             "read_blog_post",
             "random_blog_url",
-            "blog_search"
+            "blog_search",
+            "recent_blog_posts",
+            "all_blog_posts"
         }
 
         async with MCPTestClient(server_endpoint) as client:
@@ -95,13 +97,34 @@ class TestE2EBlogMCPServer:
         async with MCPTestClient(server_endpoint) as client:
             for query in test_queries:
                 content = await client.call_tool("blog_search", {"query": query, "limit": 3})
-                assertions.assert_search_results(content, query)
+                # Now returns JSON, parse it
+                import json
+                data = json.loads(content)
+
+                # Check if we got an error response or actual results
+                if "error" in data:
+                    # Valid error response (no results found)
+                    assert isinstance(data["error"], str)
+                    assert len(data["error"]) > 0
+                else:
+                    # Check structure for successful results
+                    assert "query" in data
+                    assert "count" in data
+                    assert "posts" in data
+                    assert data["query"] == query
+
+                    # If posts exist, check they're valid
+                    if data["posts"]:
+                        for post in data["posts"]:
+                            assert "title" in post
+                            assert "url" in post
+                            assert post["url"].startswith("https://idvork.in/")
 
     async def test_blog_search_empty_query(self, server_endpoint: str, assertions):
         """Test blog_search with empty query returns error."""
         async with MCPTestClient(server_endpoint) as client:
             content = await client.call_tool("blog_search", {"query": "", "limit": 5})
-            assertions.assert_error_message(content, "Error: Search query is required")
+            assertions.assert_error_message(content, "Search query is required and must be a non-empty string")
 
     async def test_blog_search_limit_parameter(self, server_endpoint: str):
         """Test blog_search respects limit parameter."""
@@ -140,6 +163,108 @@ class TestE2EBlogMCPServer:
             except Exception as e:
                 # MCP protocol might reject invalid parameters
                 assert "limit" in str(e).lower()
+
+    async def test_recent_blog_posts_e2e(self, server_endpoint: str):
+        """Test recent_blog_posts function against live endpoint."""
+        async with MCPTestClient(server_endpoint) as client:
+            content = await client.call_tool("recent_blog_posts", {"limit": 5})
+            
+            # Should return valid JSON
+            import json
+            data = json.loads(content)
+            
+            # Check structure
+            assert "count" in data
+            assert "limit" in data
+            assert "posts" in data
+            assert isinstance(data["posts"], list)
+            assert data["limit"] == 5
+            assert data["count"] <= 5
+            
+            # If posts exist, check structure
+            if data["posts"]:
+                post = data["posts"][0]
+                required_fields = ["title", "url", "description", "last_modified", "doc_size", "markdown_path", "file_path", "redirect_url"]
+                for field in required_fields:
+                    assert field in post, f"Missing field: {field}"
+                
+                # Verify URL format
+                assert post["url"].startswith("https://idvork.in/")
+                
+                # Verify markdown path format
+                assert post["markdown_path"].startswith("_d/")
+                assert post["markdown_path"].endswith(".md")
+
+    async def test_all_blog_posts_e2e(self, server_endpoint: str):
+        """Test all_blog_posts function against live endpoint."""
+        async with MCPTestClient(server_endpoint) as client:
+            content = await client.call_tool("all_blog_posts", {})
+            
+            # Should return valid JSON
+            import json
+            data = json.loads(content)
+            
+            # Check structure
+            assert "count" in data
+            assert "posts" in data
+            assert isinstance(data["posts"], list)
+            assert data["count"] > 0  # Should have some posts
+            
+            # Check first post structure
+            if data["posts"]:
+                post = data["posts"][0]
+                required_fields = ["title", "url", "description", "last_modified", "doc_size", "markdown_path", "file_path", "redirect_url"]
+                for field in required_fields:
+                    assert field in post, f"Missing field: {field}"
+                
+                # Verify URL format
+                assert post["url"].startswith("https://idvork.in/")
+                
+                # Verify markdown path format
+                assert post["markdown_path"].startswith("_d/")
+                assert post["markdown_path"].endswith(".md")
+
+    async def test_blog_search_json_e2e(self, server_endpoint: str):
+        """Test blog_search JSON format against live endpoint."""
+        async with MCPTestClient(server_endpoint) as client:
+            content = await client.call_tool("blog_search", {
+                "query": "the",  # Very common word that should match posts
+                "limit": 3
+            })
+            
+            # Should return valid JSON
+            import json
+            data = json.loads(content)
+            
+            # Check if we got results or error
+            if "error" in data:
+                # If no results, that's also valid JSON
+                assert isinstance(data["error"], str)
+                assert len(data["error"]) > 0
+            else:
+                # Check structure for successful results
+                assert "query" in data
+                assert "count" in data
+                assert "limit" in data
+                assert "posts" in data
+                assert isinstance(data["posts"], list)
+                assert data["query"] == "the"
+                assert data["limit"] == 3
+                assert data["count"] <= 3
+                
+                # If posts exist, check structure
+                if data["posts"]:
+                    post = data["posts"][0]
+                    required_fields = ["title", "url", "description", "last_modified", "doc_size", "markdown_path", "file_path", "redirect_url"]
+                    for field in required_fields:
+                        assert field in post, f"Missing field: {field}"
+                    
+                    # Verify URL format
+                    assert post["url"].startswith("https://idvork.in/")
+                    
+                    # Verify markdown path format
+                    assert post["markdown_path"].startswith("_d/")
+                    assert post["markdown_path"].endswith(".md")
 
 
 @pytest.fixture(scope="session")

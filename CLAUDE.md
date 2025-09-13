@@ -25,6 +25,58 @@ This is a Blog MCP Server built with FastMCP that provides tools for interacting
 - **Cache the data**: Cache the back-links.json response to avoid repeated network calls
 - **Reduces latency**: Eliminates 10-20 second response times caused by multiple GitHub API calls
 
+## JSON Data Structure
+
+The back-links.json file contains rich metadata for each blog post. Key functions now return JSON data:
+
+### Available Data Fields
+
+Each blog post in the JSON response includes:
+
+- **title**: Post title
+- **url**: Full blog URL (https://idvork.in/...)
+- **description**: Post excerpt/description
+- **last_modified**: ISO timestamp of last modification
+- **doc_size**: Document size in characters
+- **markdown_path**: Path to source markdown file (_d/filename.md)
+- **file_path**: Path to generated HTML file (_site/filename.html)
+- **redirect_url**: Any redirect URL for this post
+
+### JSON Functions
+
+- **blog_search(query, limit)**: Returns JSON with matching posts
+- **recent_blog_posts(limit)**: Returns JSON with most recent posts
+- **all_blog_posts()**: Returns JSON with all blog posts
+
+### Example JSON Response
+
+```json
+{
+  "count": 5,
+  "limit": 5,
+  "posts": [
+    {
+      "title": "What I wish I knew at 42",
+      "url": "https://idvork.in/42",
+      "description": "You survived young kids, marriage, house...",
+      "last_modified": "2025-07-20T19:13:52-07:00",
+      "doc_size": 20000,
+      "markdown_path": "_d/42.md",
+      "file_path": "_site/42.html",
+      "redirect_url": ""
+    }
+  ]
+}
+```
+
+### Using JSON Data
+
+The JSON format enables:
+- **Programmatic processing**: Easy to parse and filter data
+- **Rich metadata**: Access to links, timestamps, and file paths
+- **Structured queries**: Filter by date, size, or link relationships
+- **Integration**: Easy to integrate with other tools and systems
+
 ## Development Commands
 
 - Install dependencies: `just install`

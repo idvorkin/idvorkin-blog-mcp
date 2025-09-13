@@ -3,12 +3,14 @@
 Blog MCP Server
 
 A FastMCP server that provides tools for interacting with Igor's blog at idvork.in.
-This server offers five tools:
+This server offers seven tools:
 - blog_info: Get information about the blog
 - random_blog: Get a random blog post
 - read_blog_post: Read a specific blog post by URL
 - random_blog_url: Get a random blog post URL
-- blog_search: Search blog posts
+- blog_search: Search blog posts (returns JSON)
+- recent_blog_posts: Get the most recent blog posts (returns JSON)
+- all_blog_posts: Get all blog posts (returns JSON)
 """
 
 import json
@@ -206,7 +208,9 @@ Available tools:
 - random_blog: Get a random blog post
 - read_blog_post: Read a specific post by URL
 - random_blog_url: Get a random post URL
-- blog_search: Search posts by query
+- blog_search: Search posts by query (returns JSON)
+- recent_blog_posts: Get the most recent blog posts (returns JSON)
+- all_blog_posts: Get all blog posts (returns JSON)
 """
 
 
@@ -236,6 +240,61 @@ Content:
 
     except Exception as e:
         return f"Error getting random blog post: {str(e)}"
+
+
+@mcp.tool
+async def all_blog_posts() -> str:
+    """Get all blog posts from idvork.in as JSON data"""
+    try:
+        # Use cached back-links data for efficiency
+        blog_data = await get_blog_data()
+        url_info = blog_data.get("url_info", {})
+
+        if not url_info:
+            return json.dumps({"error": "No blog posts found."})
+
+        # Collect all blog posts with their metadata
+        blog_posts = []
+        for url, info in url_info.items():
+            # Skip non-blog posts
+            markdown_path = info.get("markdown_path", "")
+            if not markdown_path or not markdown_path.startswith("_d/"):
+                continue
+
+            # Return rich data from back-links
+            post = {
+                "title": info.get("title", "Untitled"),
+                "url": f"{BLOG_URL}{url}",
+                "description": info.get("description", ""),
+                "last_modified": info.get("last_modified", ""),
+                "doc_size": info.get("doc_size", 0),
+                "markdown_path": markdown_path,
+                "file_path": info.get("file_path", ""),
+                "redirect_url": info.get("redirect_url", ""),
+            }
+            blog_posts.append(post)
+
+        if not blog_posts:
+            return json.dumps({"error": "No blog posts found."})
+
+        # Sort by last_modified timestamp (most recent first)
+        def sort_key(post):
+            timestamp = post.get("last_modified", "")
+            if timestamp:
+                return timestamp
+            return "0000-00-00T00:00:00"  # Put posts without timestamps at the end
+
+        blog_posts.sort(key=sort_key, reverse=True)
+
+        result = {
+            "count": len(blog_posts),
+            "posts": blog_posts
+        }
+
+        return json.dumps(result, indent=2)
+
+    except Exception as e:
+        return json.dumps({"error": f"Error getting all blog posts: {str(e)}"})
 
 
 @mcp.tool
@@ -284,10 +343,10 @@ async def random_blog_url() -> str:
 
 @mcp.tool
 async def blog_search(query: str, limit: int = 5) -> str:
-    """Search blog posts by title or content"""
+    """Search blog posts by title or content, returning JSON data"""
     # Validate query parameter
     if not query or not isinstance(query, str) or len(query.strip()) == 0:
-        return "Error: Search query is required and must be a non-empty string"
+        return json.dumps({"error": "Search query is required and must be a non-empty string"})
 
     # Validate and sanitize limit
     try:
@@ -306,7 +365,7 @@ async def blog_search(query: str, limit: int = 5) -> str:
         url_info = blog_data.get("url_info", {})
 
         if not url_info:
-            return "No blog posts found."
+            return json.dumps({"error": "No blog posts found."})
 
         # Search through blog posts using pre-processed metadata
         matching_posts = []
@@ -324,7 +383,14 @@ async def blog_search(query: str, limit: int = 5) -> str:
                 post = {
                     "title": info.get("title", "Untitled"),
                     "url": f"{BLOG_URL}{url}",
-                    "excerpt": info.get("description", "")[:200] + "..." if len(info.get("description", "")) > 200 else info.get("description", ""),
+                    "description": info.get("description", ""),
+                    "last_modified": info.get("last_modified", ""),
+                    "doc_size": info.get("doc_size", 0),
+                    "markdown_path": markdown_path,
+                    "file_path": info.get("file_path", ""),
+                    "incoming_links": info.get("incoming_links", []),
+                    "outgoing_links": info.get("outgoing_links", []),
+                    "redirect_url": info.get("redirect_url", ""),
                 }
                 matching_posts.append(post)
 
@@ -332,18 +398,86 @@ async def blog_search(query: str, limit: int = 5) -> str:
                     break
 
         if not matching_posts:
-            return f"No blog posts found matching '{query}'"
+            return json.dumps({"error": f"No blog posts found matching '{query}'"})
 
-        result_text = f"Found {len(matching_posts)} blog posts matching '{query}':\n\n"
-        for i, post in enumerate(matching_posts, 1):
-            result_text += f"{i}. {post['title']}\n"
-            result_text += f"   URL: {post['url']}\n"
-            result_text += f"   Excerpt: {post['excerpt']}\n\n"
+        result = {
+            "query": query,
+            "count": len(matching_posts),
+            "limit": limit,
+            "posts": matching_posts
+        }
 
-        return result_text
+        return json.dumps(result, indent=2)
 
     except Exception as e:
-        return f"Error searching blog posts: {str(e)}"
+        return json.dumps({"error": f"Error searching blog posts: {str(e)}"})
+
+
+@mcp.tool
+async def recent_blog_posts(limit: int = 20) -> str:
+    """Get the most recent blog posts from idvork.in as JSON data"""
+    # Validate and sanitize limit
+    try:
+        limit = int(limit)
+        if limit < 1 or limit > 50:
+            limit = min(max(limit, 1), 50)  # Clamp between 1 and 50
+    except (ValueError, TypeError):
+        limit = 20  # Default fallback
+
+    try:
+        # Use cached back-links data for efficiency
+        blog_data = await get_blog_data()
+        url_info = blog_data.get("url_info", {})
+
+        if not url_info:
+            return json.dumps({"error": "No blog posts found."})
+
+        # Collect all blog posts with their metadata
+        blog_posts = []
+        for url, info in url_info.items():
+            # Skip non-blog posts
+            markdown_path = info.get("markdown_path", "")
+            if not markdown_path or not markdown_path.startswith("_d/"):
+                continue
+
+            # Return rich data from back-links
+            post = {
+                "title": info.get("title", "Untitled"),
+                "url": f"{BLOG_URL}{url}",
+                "description": info.get("description", ""),
+                "last_modified": info.get("last_modified", ""),
+                "doc_size": info.get("doc_size", 0),
+                "markdown_path": markdown_path,
+                "file_path": info.get("file_path", ""),
+                "redirect_url": info.get("redirect_url", ""),
+            }
+            blog_posts.append(post)
+
+        if not blog_posts:
+            return json.dumps({"error": "No blog posts found."})
+
+        # Sort by last_modified timestamp (most recent first) - posts without timestamps go to the end
+        def sort_key(post):
+            timestamp = post.get("last_modified", "")
+            if timestamp:
+                return timestamp
+            return "0000-00-00T00:00:00"  # Put posts without timestamps at the end
+
+        blog_posts.sort(key=sort_key, reverse=True)
+
+        # Take the requested number of posts
+        recent_posts = blog_posts[:limit]
+
+        result = {
+            "count": len(recent_posts),
+            "limit": limit,
+            "posts": recent_posts
+        }
+
+        return json.dumps(result, indent=2)
+
+    except Exception as e:
+        return json.dumps({"error": f"Error getting recent blog posts: {str(e)}"})
 
 
 if __name__ == "__main__":

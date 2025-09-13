@@ -15,6 +15,8 @@ import json
 import logging
 import random
 import re
+import time
+from typing import Optional
 
 import httpx
 from fastmcp import FastMCP
@@ -27,6 +29,12 @@ logger = logging.getLogger(__name__)
 mcp = FastMCP("blog-mcp-server")
 GITHUB_REPO_URL = "https://api.github.com/repos/idvorkin/idvorkin.github.io"
 BLOG_URL = "https://idvork.in"
+BACKLINKS_URL = "https://raw.githubusercontent.com/idvorkin/idvorkin.github.io/master/back-links.json"
+
+# Cache for back-links data (expires after 5 minutes)
+_blog_cache: Optional[dict] = None
+_cache_timestamp: float = 0
+CACHE_DURATION = 300  # 5 minutes
 
 
 class BlogError(Exception):
@@ -59,33 +67,61 @@ async def fetch_url(url: str) -> str:
             raise BlogError(f"Unexpected error fetching {url}: {e}") from e
 
 
-async def get_blog_files() -> list[dict]:
-    """Get all blog post files from GitHub repository."""
+async def get_blog_data() -> dict:
+    """Get cached blog data from back-links.json file."""
+    global _blog_cache, _cache_timestamp
+
+    current_time = time.time()
+
+    # Return cached data if still valid
+    if _blog_cache and (current_time - _cache_timestamp) < CACHE_DURATION:
+        return _blog_cache
+
     try:
-        # Get files from the _d directory containing markdown blog posts
-        api_url = f"{GITHUB_REPO_URL}/contents/_d"
-        content = await fetch_url(api_url)
+        logger.info("Fetching fresh blog data from back-links.json")
+        content = await fetch_url(BACKLINKS_URL)
+        _blog_cache = json.loads(content)
+        _cache_timestamp = current_time
 
-        # Parse JSON response
-        files_data = json.loads(content)
-
-        # Filter for markdown files
-        markdown_files = []
-        for file_info in files_data:
-            if file_info.get("name", "").endswith(".md") and file_info.get("type") == "file":
-                markdown_files.append(
-                    {
-                        "name": file_info["name"],
-                        "path": file_info["path"],
-                        "download_url": file_info["download_url"],
-                        "html_url": f"{BLOG_URL}/{file_info['name'].replace('.md', '')}",
-                    }
-                )
-
-        return markdown_files[:50]  # Limit to 50 posts
+        logger.info(f"Cached {len(_blog_cache.get('url_info', {}))} blog entries")
+        return _blog_cache
 
     except Exception as e:
-        logger.error(f"Error getting blog posts: {e}")
+        logger.error(f"Failed to fetch back-links.json: {e}")
+        # Fall back to cached data if available, even if expired
+        if _blog_cache:
+            logger.warning("Using expired cache due to fetch failure")
+            return _blog_cache
+        raise BlogError(f"Failed to get blog data: {e}") from e
+
+
+async def get_blog_files() -> list[dict]:
+    """Get all blog post files - optimized to use back-links.json."""
+    try:
+        blog_data = await get_blog_data()
+        url_info = blog_data.get("url_info", {})
+
+        blog_files = []
+        for url, info in url_info.items():
+            # Skip non-blog posts (pages without markdown_path or not in _d directory)
+            markdown_path = info.get("markdown_path", "")
+            if not markdown_path or not markdown_path.startswith("_d/"):
+                continue
+
+            # Convert back-links format to old blog files format for compatibility
+            blog_file = {
+                "name": markdown_path.split("/")[-1] if "/" in markdown_path else markdown_path,
+                "path": markdown_path,
+                "download_url": f"https://raw.githubusercontent.com/idvorkin/idvorkin.github.io/master/{markdown_path}",
+                "html_url": f"{BLOG_URL}{url}",  # Use the actual blog URL
+            }
+            blog_files.append(blog_file)
+
+        logger.info(f"Found {len(blog_files)} blog files (optimized)")
+        return blog_files[:50]  # Limit to 50 posts for compatibility
+
+    except Exception as e:
+        logger.error(f"Error getting blog files: {e}")
         return []
 
 
@@ -265,27 +301,35 @@ async def blog_search(query: str, limit: int = 5) -> str:
     query = query.strip().lower()[:100]  # Limit query length
 
     try:
-        blog_files = await get_blog_files()
-        if not blog_files:
+        # Use cached back-links data instead of fetching individual files
+        blog_data = await get_blog_data()
+        url_info = blog_data.get("url_info", {})
+
+        if not url_info:
             return "No blog posts found."
 
-        # Search through blog posts
+        # Search through blog posts using pre-processed metadata
         matching_posts = []
-        for file_info in blog_files[:20]:  # Limit search to first 20 posts for performance
-            try:
-                blog_post = await parse_markdown_content(file_info)
-                # Check if query matches title or content
-                if query in blog_post["title"].lower() or (
-                    blog_post["content"] and query in blog_post["content"].lower()
-                ):
-                    matching_posts.append(blog_post)
+        for url, info in url_info.items():
+            # Skip non-blog posts
+            markdown_path = info.get("markdown_path", "")
+            if not markdown_path or not markdown_path.startswith("_d/"):
+                continue
+
+            # Search in title and description (no need to download full content)
+            title = info.get("title", "").lower()
+            description = info.get("description", "").lower()
+
+            if query in title or query in description:
+                post = {
+                    "title": info.get("title", "Untitled"),
+                    "url": f"{BLOG_URL}{url}",
+                    "excerpt": info.get("description", "")[:200] + "..." if len(info.get("description", "")) > 200 else info.get("description", ""),
+                }
+                matching_posts.append(post)
 
                 if len(matching_posts) >= limit:
                     break
-
-            except Exception as e:
-                logger.warning(f"Error processing {file_info.get('name', 'unknown')}: {e}")
-                continue
 
         if not matching_posts:
             return f"No blog posts found matching '{query}'"

@@ -5,53 +5,53 @@ default:
 fast-test:
     @echo "Running fast tests..."
     uv run python -m py_compile blog_mcp_server.py
-    uv run pytest test_blog_mcp_e2e.py -v -k "not test_real_" --tb=short -q
+    uv run pytest test_unit.py -v --tb=short -q
     @echo "✅ Fast tests passed"
 
 # Run comprehensive test suite
 test:
     @echo "Running comprehensive tests..."
-    uv run pytest test_blog_mcp_e2e.py -v --tb=short -n auto
+    uv run pytest test_unit.py test_e2e.py -v --tb=short -n auto
     @echo "✅ All tests completed"
 
 # Run tests with coverage
 test-coverage:
-    uv run pytest test_blog_mcp_e2e.py -v --cov=blog_mcp_server --cov-report=term-missing -n auto
+    uv run pytest test_unit.py test_e2e.py -v --cov=blog_mcp_server --cov-report=term-missing -n auto
 
-# Run only unit tests (mocked)
+# Run only unit tests (uses real GitHub API)
 test-unit:
-    uv run pytest test_blog_mcp_e2e.py -v -k "not test_real_" --tb=short -n auto
+    uv run pytest test_unit.py -v --tb=short -n auto
 
 # Run only integration tests (real API calls)
 test-integration:
-    uv run pytest test_blog_mcp_e2e.py -v -k "test_real_" --tb=short
+    uv run pytest test_unit.py -v --tb=short
 
 # Run E2E tests against local server (start server first with 'just serve-http')
-test-e2e:
-    @echo "🏠 Running E2E tests against LOCAL server..."
-    @echo "   Make sure local server is running: just serve-http"
-    MCP_SERVER_ENDPOINT="http://localhost:8000/mcp" uv run pytest test_production_e2e.py -v --tb=short -n auto
+test-e2e url="http://localhost:8000/mcp":
+    @echo "🏠 Running E2E tests against server: {{url}}"
+    @echo "   Make sure server is running"
+    MCP_SERVER_ENDPOINT="{{url}}" uv run pytest test_e2e.py -v --tb=short -n auto
 
 # Run E2E tests against production server
 test-prod:
     @echo "🌐 Running E2E tests against PRODUCTION server..."
-    MCP_SERVER_ENDPOINT="https://idvorkin-blog-mcp.fastmcp.app/mcp" uv run pytest test_production_e2e.py -v --tb=short -n auto
+    MCP_SERVER_ENDPOINT="https://idvorkin-blog-mcp.fastmcp.app/mcp" uv run pytest test_e2e.py -v --tb=short -n auto
 
 # Run E2E tests against production server (sequential for debugging)
 test-prod-sequential:
     @echo "🌐 Running E2E tests against PRODUCTION server (sequential)..."
-    MCP_SERVER_ENDPOINT="https://idvorkin-blog-mcp.fastmcp.app/mcp" uv run pytest test_production_e2e.py -v --tb=short
+    MCP_SERVER_ENDPOINT="https://idvorkin-blog-mcp.fastmcp.app/mcp" uv run pytest test_e2e.py -v --tb=short
 
 # Run all tests (unit + E2E) in parallel
 test-all:
     @echo "🚀 Running ALL tests in parallel..."
-    uv run pytest test_blog_mcp_e2e.py test_production_e2e.py -v --tb=short -n auto
+    uv run pytest test_unit.py test_e2e.py -v --tb=short -n auto
     @echo "✅ All tests completed"
 
 # Performance test with timing
 test-perf:
     @echo "⏱️ Running performance tests with timing..."
-    time uv run pytest test_production_e2e.py -v --tb=short -n auto --durations=10
+    time uv run pytest test_e2e.py -v --tb=short -n auto --durations=10
     @echo "✅ Performance test completed"
 
 # Install dependencies with UV

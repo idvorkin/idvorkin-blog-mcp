@@ -83,7 +83,7 @@ class TestBlogMCPServer:
         """Test blog_search with empty query."""
         async with MCPTestClient(mcp_server) as client:
             content = await client.call_tool("blog_search", {"query": "", "limit": 5})
-            assertions.assert_error_message(content, "Error: Search query is required")
+            assertions.assert_error_message(content, "Search query is required and must be a non-empty string")
 
     async def test_blog_search_limit(self, mcp_server):
         """Test blog_search respects limit parameter."""
@@ -100,6 +100,87 @@ class TestBlogMCPServer:
                 title_count = content.count("Title:")
                 assert title_count <= 2, f"Limit not respected: found {title_count} results"
 
+    async def test_recent_blog_posts(self, mcp_server):
+        """Test recent_blog_posts returns JSON with recent posts."""
+        async with MCPTestClient(mcp_server) as client:
+            content = await client.call_tool("recent_blog_posts", {"limit": 3})
+            
+            # Should return valid JSON
+            import json
+            data = json.loads(content)
+            
+            # Check structure
+            assert "count" in data
+            assert "limit" in data
+            assert "posts" in data
+            assert isinstance(data["posts"], list)
+            assert data["limit"] == 3
+            assert data["count"] <= 3
+            
+            # If posts exist, check structure
+            if data["posts"]:
+                post = data["posts"][0]
+                required_fields = ["title", "url", "description", "last_modified", "doc_size", "markdown_path", "file_path", "redirect_url"]
+                for field in required_fields:
+                    assert field in post, f"Missing field: {field}"
+
+    async def test_all_blog_posts(self, mcp_server):
+        """Test all_blog_posts returns JSON with all posts."""
+        async with MCPTestClient(mcp_server) as client:
+            content = await client.call_tool("all_blog_posts", {})
+            
+            # Should return valid JSON
+            import json
+            data = json.loads(content)
+            
+            # Check structure
+            assert "count" in data
+            assert "posts" in data
+            assert isinstance(data["posts"], list)
+            assert data["count"] > 0  # Should have some posts
+            
+            # Check first post structure
+            if data["posts"]:
+                post = data["posts"][0]
+                required_fields = ["title", "url", "description", "last_modified", "doc_size", "markdown_path", "file_path", "redirect_url"]
+                for field in required_fields:
+                    assert field in post, f"Missing field: {field}"
+
+    async def test_blog_search_json_format(self, mcp_server):
+        """Test blog_search returns proper JSON format."""
+        async with MCPTestClient(mcp_server) as client:
+            content = await client.call_tool("blog_search", {
+                "query": "the",  # Very common word that should match posts
+                "limit": 2
+            })
+            
+            # Should return valid JSON
+            import json
+            data = json.loads(content)
+            
+            # Check if we got results or error
+            if "error" in data:
+                # If no results, that's also valid JSON
+                assert isinstance(data["error"], str)
+                assert len(data["error"]) > 0
+            else:
+                # Check structure for successful results
+                assert "query" in data
+                assert "count" in data
+                assert "limit" in data
+                assert "posts" in data
+                assert isinstance(data["posts"], list)
+                assert data["query"] == "the"
+                assert data["limit"] == 2
+                assert data["count"] <= 2
+                
+                # If posts exist, check structure
+                if data["posts"]:
+                    post = data["posts"][0]
+                    required_fields = ["title", "url", "description", "last_modified", "doc_size", "markdown_path", "file_path", "redirect_url"]
+                    for field in required_fields:
+                        assert field in post, f"Missing field: {field}"
+
     def test_server_configuration(self):
         """Test that the FastMCP server is properly configured."""
         assert blog_mcp_server.mcp.name == "blog-mcp-server"
@@ -110,7 +191,9 @@ class TestBlogMCPServer:
             "random_blog",
             "read_blog_post",
             "random_blog_url",
-            "blog_search"
+            "blog_search",
+            "recent_blog_posts",
+            "all_blog_posts"
         ]
 
         for tool_name in expected_tools:

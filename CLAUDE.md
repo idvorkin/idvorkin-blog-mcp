@@ -18,6 +18,13 @@ This is a Blog MCP Server built with FastMCP that provides tools for interacting
 - Tools should return strings (FastMCP handles JSON conversion automatically)
 - Use type hints for automatic schema generation
 
+## Performance Optimization
+
+- **Use back-links.json**: Instead of fetching individual files via GitHub API (108+ calls), use the pre-built `back-links.json` file at https://raw.githubusercontent.com/idvorkin/idvorkin.github.io/master/back-links.json
+- **Single API call**: This file contains all blog metadata (titles, descriptions, URLs, backlinks) needed for all tools
+- **Cache the data**: Cache the back-links.json response to avoid repeated network calls
+- **Reduces latency**: Eliminates 10-20 second response times caused by multiple GitHub API calls
+
 ## Development Commands
 
 - Install dependencies: `just install`
@@ -28,7 +35,15 @@ This is a Blog MCP Server built with FastMCP that provides tools for interacting
 - Run server with HTTP: `just serve-http [PORT]` (defaults to port 8000)
 - List all commands: `just` (default command)
 
-## Deployment Commands
+## Deployment
+
+### FastMCP Cloud (Automatic)
+
+- **Live URL**: https://idvorkin-blog-mcp.fastmcp.app/mcp
+- **Auto-deployment**: Automatically deploys on push to main branch
+- **Authentication**: Requires API key for access
+
+### Manual Deployment Commands
 
 - Deploy to Google Cloud Run: `just deploy PROJECT_ID [REGION]`
 - Deploy using container: `just deploy-container PROJECT_ID [REGION]`

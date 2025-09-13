@@ -27,10 +27,10 @@ test-integration:
     uv run pytest test_unit.py -v --tb=short
 
 # Run E2E tests against local server (start server first with 'just serve-http')
-test-e2e:
-    @echo "🏠 Running E2E tests against LOCAL server..."
-    @echo "   Make sure local server is running: just serve-http"
-    MCP_SERVER_ENDPOINT="http://localhost:8000/mcp" uv run pytest test_e2e.py -v --tb=short -n auto
+test-e2e url="http://localhost:8000/mcp":
+    @echo "🏠 Running E2E tests against server: {{url}}"
+    @echo "   Make sure server is running"
+    MCP_SERVER_ENDPOINT="{{url}}" uv run pytest test_e2e.py -v --tb=short -n auto
 
 # Run E2E tests against production server
 test-prod:

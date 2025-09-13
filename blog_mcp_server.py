@@ -120,7 +120,7 @@ async def get_blog_files() -> list[dict]:
             blog_files.append(blog_file)
 
         logger.info(f"Found {len(blog_files)} blog files (optimized)")
-        return blog_files[:50]  # Limit to 50 posts for compatibility
+        return blog_files  # Return all blog files
 
     except Exception as e:
         logger.error(f"Error getting blog files: {e}")

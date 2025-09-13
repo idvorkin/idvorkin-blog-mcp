@@ -138,6 +138,36 @@ class TestE2EBlogMCPServer:
                 title_count = content.count("Title:")
                 assert title_count <= 2, f"Limit not respected: found {title_count} results"
 
+    async def test_read_blog_post_valid_url(self, server_endpoint: str, assertions):
+        """Test read_blog_post with valid URL returns blog content."""
+        # Use a known stable blog post URL
+        valid_urls = [
+            "https://idvork.in/42",  # What I wish I knew at 42
+            "https://idvork.in/40yo",  # What I wish I knew at 40
+            "https://idvork.in/decisive",  # Decisive post
+            "https://idvork.in/gap-year",  # Gap year post
+        ]
+
+        async with MCPTestClient(server_endpoint) as client:
+            for url in valid_urls:
+                content = await client.call_tool("read_blog_post", {"url": url})
+
+                # Should not be an error
+                assert not content.startswith("Error:"), f"Got error for valid URL {url}: {content}"
+
+                # Should contain title and content
+                assert "Title:" in content or "title:" in content, f"Missing title in response for {url}"
+                assert "URL:" in content or "url:" in content, f"Missing URL in response for {url}"
+
+                # Should have substantial content (at least 100 chars)
+                assert len(content) > 100, f"Content too short for {url}: {len(content)} chars"
+
+                # Should contain the actual URL
+                assert url in content, f"URL {url} not found in response"
+
+                # Break after first successful test to avoid rate limiting
+                break
+
     async def test_read_blog_post_invalid_url(self, server_endpoint: str, assertions):
         """Test read_blog_post with invalid URL."""
         async with MCPTestClient(server_endpoint) as client:
@@ -231,11 +261,11 @@ class TestE2EBlogMCPServer:
                 "query": "the",  # Very common word that should match posts
                 "limit": 3
             })
-            
+
             # Should return valid JSON
             import json
             data = json.loads(content)
-            
+
             # Check if we got results or error
             if "error" in data:
                 # If no results, that's also valid JSON
@@ -251,17 +281,17 @@ class TestE2EBlogMCPServer:
                 assert data["query"] == "the"
                 assert data["limit"] == 3
                 assert data["count"] <= 3
-                
+
                 # If posts exist, check structure
                 if data["posts"]:
                     post = data["posts"][0]
                     required_fields = ["title", "url", "description", "last_modified", "doc_size", "markdown_path", "file_path", "redirect_url"]
                     for field in required_fields:
                         assert field in post, f"Missing field: {field}"
-                    
+
                     # Verify URL format
                     assert post["url"].startswith("https://idvork.in/")
-                    
+
                     # Verify markdown path format
                     assert post["markdown_path"].startswith("_d/")
                     assert post["markdown_path"].endswith(".md")

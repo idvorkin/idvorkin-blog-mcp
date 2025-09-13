@@ -105,9 +105,14 @@ async def get_blog_files() -> list[dict]:
 
         blog_files = []
         for url, info in url_info.items():
-            # Skip non-blog posts (pages without markdown_path or not in _d directory)
+            # Include blog posts from _d/, _posts/, and td/ directories
             markdown_path = info.get("markdown_path", "")
-            if not markdown_path or not markdown_path.startswith("_d/"):
+            if not markdown_path:
+                continue
+            # Include posts from _d/, _posts/, and td/ directories
+            if not (markdown_path.startswith("_d/") or
+                    markdown_path.startswith("_posts/") or
+                    markdown_path.startswith("td/")):
                 continue
 
             # Convert back-links format to old blog files format for compatibility
@@ -256,9 +261,13 @@ async def all_blog_posts() -> str:
         # Collect all blog posts with their metadata
         blog_posts = []
         for url, info in url_info.items():
-            # Skip non-blog posts
+            # Include posts from _d/, _posts/, and td/ directories
             markdown_path = info.get("markdown_path", "")
-            if not markdown_path or not markdown_path.startswith("_d/"):
+            if not markdown_path:
+                continue
+            if not (markdown_path.startswith("_d/") or
+                    markdown_path.startswith("_posts/") or
+                    markdown_path.startswith("td/")):
                 continue
 
             # Return rich data from back-links
@@ -343,7 +352,7 @@ async def read_blog_post(url: str) -> str:
         # Check if path exists directly
         if path in url_info:
             markdown_path = url_info[path].get("markdown_path", "")
-            if markdown_path and markdown_path.startswith("_d/"):
+            if markdown_path:
                 # Found it! Get the file
                 blog_files = await get_blog_files()
                 for file_info in blog_files:
@@ -431,9 +440,13 @@ async def blog_search(query: str, limit: int = 5) -> str:
         # Search through blog posts using pre-processed metadata
         matching_posts = []
         for url, info in url_info.items():
-            # Skip non-blog posts
+            # Include posts from _d/, _posts/, and td/ directories
             markdown_path = info.get("markdown_path", "")
-            if not markdown_path or not markdown_path.startswith("_d/"):
+            if not markdown_path:
+                continue
+            if not (markdown_path.startswith("_d/") or
+                    markdown_path.startswith("_posts/") or
+                    markdown_path.startswith("td/")):
                 continue
 
             # Search in title and description (no need to download full content)
@@ -496,9 +509,13 @@ async def recent_blog_posts(limit: int = 20) -> str:
         # Collect all blog posts with their metadata
         blog_posts = []
         for url, info in url_info.items():
-            # Skip non-blog posts
+            # Include posts from _d/, _posts/, and td/ directories
             markdown_path = info.get("markdown_path", "")
-            if not markdown_path or not markdown_path.startswith("_d/"):
+            if not markdown_path:
+                continue
+            if not (markdown_path.startswith("_d/") or
+                    markdown_path.startswith("_posts/") or
+                    markdown_path.startswith("td/")):
                 continue
 
             # Return rich data from back-links

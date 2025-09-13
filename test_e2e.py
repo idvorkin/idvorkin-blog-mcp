@@ -239,6 +239,56 @@ class TestE2EBlogMCPServer:
             content = await client.call_tool("read_blog_post", {"url": ""})
             assertions.assert_error_message(content, "Error: URL must be a non-empty string")
 
+    async def test_read_blog_post_from_posts_directory(self, server_endpoint: str):
+        """Test read_blog_post can access posts from _posts/ directory."""
+        async with MCPTestClient(server_endpoint) as client:
+            # Test a post from _posts/ directory
+            test_posts = [
+                "_posts/2018-01-04-7-habits.md",
+                "2018-01-04-7-habits.md",  # Just filename
+                "/7-habits",  # URL path
+            ]
+
+            for post_path in test_posts:
+                content = await client.call_tool("read_blog_post", {"url": post_path})
+                # At least one should work
+                if not content.startswith("Error:"):
+                    assert "habit" in content.lower() or "7" in content, f"Should find 7 habits post for {post_path}"
+                    assert len(content) > 100, f"Should have content for {post_path}"
+                    break
+            else:
+                pytest.fail("Could not access any _posts/ directory posts")
+
+    async def test_all_blog_posts_includes_all_directories(self, server_endpoint: str):
+        """Test all_blog_posts includes posts from _d/, _posts/, and td/ directories."""
+        async with MCPTestClient(server_endpoint) as client:
+            content = await client.call_tool("all_blog_posts", {})
+
+            import json
+            data = json.loads(content)
+
+            # Count posts from different directories
+            d_posts = 0
+            posts_posts = 0
+            td_posts = 0
+
+            for post in data.get("posts", []):
+                markdown_path = post.get("markdown_path", "")
+                if markdown_path.startswith("_d/"):
+                    d_posts += 1
+                elif markdown_path.startswith("_posts/"):
+                    posts_posts += 1
+                elif markdown_path.startswith("td/"):
+                    td_posts += 1
+
+            # Should have posts from at least _d/ and _posts/
+            assert d_posts > 0, "Should have posts from _d/ directory"
+            assert posts_posts > 0, "Should have posts from _posts/ directory"
+            # td/ might be empty, so we don't assert on it
+
+            # Total should be more than just _d/ posts
+            assert data["count"] > 200, f"Should have more than 200 posts total, got {data['count']}"
+
     async def test_read_blog_post_nonexistent_url(self, server_endpoint: str, assertions):
         """Test read_blog_post with nonexistent URL."""
         async with MCPTestClient(server_endpoint) as client:

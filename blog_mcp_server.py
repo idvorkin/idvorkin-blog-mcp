@@ -299,17 +299,47 @@ async def all_blog_posts() -> str:
 
 @mcp.tool
 async def read_blog_post(url: str) -> str:
-    """Read a specific blog post by URL"""
+    """Read a specific blog post by URL, redirect path, or markdown path (e.g., _d/42.md)"""
     if not url or not isinstance(url, str) or len(url.strip()) == 0:
         return "Error: URL must be a non-empty string"
 
+    url = url.strip()
+
     try:
-        # Try to find the file by URL
-        blog_files = await get_blog_files()
-        for file_info in blog_files:
-            if file_info["html_url"] == url.strip():
-                blog_post = await parse_markdown_content(file_info)
-                return f"""Blog Post:
+        blog_data = await get_blog_data()
+        url_info = blog_data.get("url_info", {})
+
+        # Handle different URL formats
+        if url.startswith("http"):
+            # Full URL - extract path
+            if "idvork.in" in url:
+                path = url.replace("https://idvork.in", "").replace("http://idvork.in", "")
+                if not path:
+                    path = "/"  # Root path
+            else:
+                return "Error: URL must be from idvork.in"
+        elif url.startswith("_d/") and url.endswith(".md"):
+            # Markdown path - find corresponding URL
+            for url_path, info in url_info.items():
+                if info.get("markdown_path") == url:
+                    path = url_path
+                    break
+            else:
+                return f"Blog post not found for markdown path: {url}"
+        else:
+            # Assume it's a path like /42 or /fortytwo
+            path = url if url.startswith("/") else f"/{url}"
+
+        # Check if path exists directly
+        if path in url_info:
+            markdown_path = url_info[path].get("markdown_path", "")
+            if markdown_path and markdown_path.startswith("_d/"):
+                # Found it! Get the file
+                blog_files = await get_blog_files()
+                for file_info in blog_files:
+                    if file_info["path"] == markdown_path:
+                        blog_post = await parse_markdown_content(file_info)
+                        return f"""Blog Post:
 
 Title: {blog_post["title"]}
 URL: {blog_post["url"]}
@@ -319,7 +349,28 @@ Content:
 {blog_post["content"]}
 """
 
-        return "Blog post not found in GitHub repository"
+        # Check redirects - look for any post that redirects from this path
+        blog_files = await get_blog_files()
+        for file_info in blog_files:
+            # Fetch the markdown to check redirect_from
+            try:
+                markdown_content = await fetch_url(file_info["download_url"])
+                # Check if this post has redirect_from that matches our path
+                if f"- {path}" in markdown_content or f"/{path.lstrip('/')}" in markdown_content:
+                    blog_post = await parse_markdown_content(file_info)
+                    return f"""Blog Post (via redirect from {path}):
+
+Title: {blog_post["title"]}
+URL: {blog_post["url"]}
+Date: {blog_post["date"] or "Unknown"}
+
+Content:
+{blog_post["content"]}
+"""
+            except:
+                continue
+
+        return f"Blog post not found for: {url}"
 
     except Exception as e:
         logger.error(f"Unexpected error in read_blog_post: {e}")

@@ -168,6 +168,43 @@ class TestE2EBlogMCPServer:
                 # Break after first successful test to avoid rate limiting
                 break
 
+    async def test_read_blog_post_with_redirect(self, server_endpoint: str):
+        """Test read_blog_post with redirect URLs."""
+        async with MCPTestClient(server_endpoint) as client:
+            # Test redirect URL - /fortytwo redirects to /42
+            content = await client.call_tool("read_blog_post", {"url": "/fortytwo"})
+
+            # Should get the /42 post via redirect
+            assert not content.startswith("Error:"), f"Got error for redirect URL: {content}"
+            assert ("redirect" in content.lower() or "42" in content), "Should indicate redirect or show /42 content"
+            assert len(content) > 100, "Should have substantial content"
+
+    async def test_read_blog_post_with_markdown_path(self, server_endpoint: str):
+        """Test read_blog_post with markdown file paths."""
+        async with MCPTestClient(server_endpoint) as client:
+            # Test with markdown path
+            content = await client.call_tool("read_blog_post", {"url": "_d/42.md"})
+
+            # Should successfully find the post
+            assert not content.startswith("Error:"), f"Got error for markdown path: {content}"
+            assert "42" in content or "forty" in content.lower(), "Should find the 42 post"
+            assert len(content) > 100, "Should have substantial content"
+
+    async def test_read_blog_post_path_formats(self, server_endpoint: str):
+        """Test read_blog_post with various path formats."""
+        test_paths = [
+            "42",  # Without leading slash
+            "/42",  # With leading slash
+            "https://idvork.in/42",  # Full URL
+            "_d/42.md",  # Markdown path
+        ]
+
+        async with MCPTestClient(server_endpoint) as client:
+            for path in test_paths:
+                content = await client.call_tool("read_blog_post", {"url": path})
+                assert not content.startswith("Error:"), f"Failed for path format '{path}': {content[:100]}"
+                assert len(content) > 100, f"No content for path format '{path}'"
+
     async def test_read_blog_post_invalid_url(self, server_endpoint: str, assertions):
         """Test read_blog_post with invalid URL."""
         async with MCPTestClient(server_endpoint) as client:

@@ -52,10 +52,10 @@ This is a Blog MCP Server built with FastMCP that provides tools for interacting
 
 ## Testing Strategy
 
-- **Unit Tests**: Mock GitHub API responses for isolated testing
-- **E2E Tests**: Can rely on GitHub API being available (idvorkin/idvorkin.github.io repo)
-- **GitHub Dependency**: Tests assume GitHub API is accessible and the blog repository exists
-- **Network Tests**: Some tests verify actual GitHub API integration for real-world validation
+- **Unit Tests (`test_unit.py`)**: Use real GitHub API calls (no mocking) since the API is fast and data is stable
+- **E2E Tests (`test_e2e.py`)**: Test against deployed endpoints (local or production)
+- **GitHub Dependency**: Both test suites rely on GitHub API being available and the idvorkin/idvorkin.github.io repo existing
+- **Simplicity over isolation**: We prefer simple, readable tests that use real data over complex mocked tests
 
 ## Chop Conventions Setup
 

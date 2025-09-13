@@ -1,0 +1,52 @@
+# This file specifies files that are intentionally untracked by gcloud
+# and should not be uploaded to Google Cloud during deployment
+
+.git
+.gitignore
+README.md
+.specstory/**
+
+# Testing files
+test_*.py
+*_test.py
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Development files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg-info/
+.mypy_cache/
+.pyre/
+
+# UV and pip
+.venv/
+venv/
+env/
+ENV/
+
+# Temporary files
+*.tmp
+*.temp
+*.bak
+*.orig
+.DS_Store
+Thumbs.db
+
+# Documentation
+docs/
+chop_conventions/
+
+# Lock files (uv.lock is needed for deployment)
+# Keep uv.lock for proper dependency resolution

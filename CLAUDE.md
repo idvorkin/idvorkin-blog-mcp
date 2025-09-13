@@ -20,12 +20,20 @@ This is a Blog MCP Server built with FastMCP that provides tools for interacting
 
 ## Development Commands
 
-- Install dependencies: `just install` or `pip install -r requirements.txt`
+- Install dependencies: `just install`
 - Run fast tests: `just fast-test` (syntax validation, used by pre-commit)
 - Run all available tests: `just test`
 - Run full test suite: `python -m pytest test_blog_mcp_e2e.py -v`
-- Run the server: `just serve` or `python blog_mcp_server.py`
+- Run the server locally: `just serve` (STDIO transport)
+- Run server with HTTP: `just serve-http [PORT]` (defaults to port 8000)
 - List all commands: `just` (default command)
+
+## Deployment Commands
+
+- Deploy to Google Cloud Run: `just deploy PROJECT_ID [REGION]`
+- Deploy using container: `just deploy-container PROJECT_ID [REGION]`
+- Check deployment status: `just deploy-status PROJECT_ID [REGION]`
+- View deployment logs: `just deploy-logs PROJECT_ID [REGION]`
 
 ## Testing Strategy
 

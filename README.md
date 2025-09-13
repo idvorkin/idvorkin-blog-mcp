@@ -153,7 +153,17 @@ Linting:
 ruff blog_mcp_server.py
 ```
 
-## Cloud Deployment
+## Deployment
+
+### FastMCP Cloud (Production)
+
+**Live Server**: https://idvorkin-blog-mcp.fastmcp.app/mcp
+
+- Automatically deploys on push to main branch
+- Requires API key authentication for access
+- Powered by FastMCP 2.0 cloud hosting
+
+### Manual Cloud Deployment
 
 This server supports deployment to FastMCP 2.0 cloud hosting. Configure your FastMCP API key in the environment variables.
 
@@ -164,6 +174,15 @@ This server supports deployment to FastMCP 2.0 cloud hosting. Configure your Fas
 - Implements content extraction from blog posts using regex patterns
 - Supports both stdio and HTTP transport modes
 - Includes comprehensive error handling and logging
+
+## Performance Notes
+
+- **Current Implementation**: Fetches individual files via GitHub API (108+ calls per request)
+- **Performance Issue**: Results in 10-20 second response times due to multiple API calls
+- **Optimization Needed**: Should use `back-links.json` file instead
+  - Single API call to: https://raw.githubusercontent.com/idvorkin/idvorkin.github.io/master/back-links.json
+  - Contains all blog metadata (titles, descriptions, URLs, backlinks)
+  - Would reduce response times from 20+ seconds to sub-second
 
 ## License
 

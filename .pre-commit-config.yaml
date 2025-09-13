@@ -39,8 +39,8 @@ repos:
   - repo: local
     hooks:
       - id: test
-        name: Run Fast Tests
-        entry: just fast-test
+        name: Run Fast Tests (UV + Pytest)
+        entry: uv run pytest test_blog_mcp_e2e.py -v -k "not test_real_" --tb=short -q
         language: system
         pass_filenames: false
         always_run: true

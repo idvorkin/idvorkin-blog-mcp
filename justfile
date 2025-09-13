@@ -1,29 +1,41 @@
 default:
     @just --list
 
-# Fast tests for pre-commit hooks
+# Fast tests for pre-commit hooks (syntax check only)
 fast-test:
-    @echo "Running basic validation tests..."
-    python3 check_syntax.py
+    @echo "Running fast tests..."
+    uv run python -m py_compile blog_mcp_server.py
+    uv run pytest test_blog_mcp_e2e.py -v -k "not test_real_" --tb=short -q
     @echo "✅ Fast tests passed"
 
-# Run comprehensive test suite 
+# Run comprehensive test suite
 test:
     @echo "Running comprehensive tests..."
-    python3 check_syntax.py
-    python3 run_simple_tests.py
-    @echo "Run full test suite with: python -m pytest test_blog_mcp_e2e.py -v"
-    @echo "✅ All available tests completed"
+    uv run pytest test_blog_mcp_e2e.py -v --tb=short
+    @echo "✅ All tests completed"
 
-# Install dependencies (only if needed for this Python project)
+# Run tests with coverage
+test-coverage:
+    uv run pytest test_blog_mcp_e2e.py -v --cov=blog_mcp_server --cov-report=term-missing
+
+# Run only unit tests (mocked)
+test-unit:
+    uv run pytest test_blog_mcp_e2e.py -v -k "not test_real_" --tb=short
+
+# Run only integration tests (real API calls)
+test-integration:
+    uv run pytest test_blog_mcp_e2e.py -v -k "test_real_" --tb=short
+
+# Install dependencies with UV
 install:
-    @echo "Installing Python dependencies..."
-    pip install -r requirements.txt
-    @echo "✅ Dependencies installed"
+    @echo "Setting up UV environment..."
+    uv venv
+    uv pip install -r requirements.txt
+    @echo "✅ Dependencies installed with UV"
 
 # Run the blog MCP server
 serve:
-    python3 blog_mcp_server.py
+    uv run python blog_mcp_server.py
 
 # Check what files would be ignored by git
 check-ignored:

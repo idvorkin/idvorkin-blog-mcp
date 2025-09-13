@@ -1,7 +1,7 @@
 repos:
   # 🐍 Python: Linting and formatting
   - repo: https://github.com/astral-sh/ruff-pre-commit
-    rev: v0.11.11
+    rev: v0.13.0
     hooks:
       - id: ruff
         name: Ruff Linter
@@ -13,7 +13,7 @@ repos:
 
   # ⚡ Biome: JS/TS/JSON/CSS/etc.
   - repo: https://github.com/biomejs/pre-commit
-    rev: v2.0.0-beta.5
+    rev: v2.2.4
     hooks:
       - id: biome-check
         name: Biome Lint & Format

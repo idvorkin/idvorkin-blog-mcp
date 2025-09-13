@@ -5,7 +5,7 @@ A FastMCP server that provides tools for interacting with Igor's blog at [idvork
 ## Architecture
 
 - **FastMCP 2.0**: High-level Python framework that handles all MCP protocol details
-- **GitHub Source**: Reads markdown files directly from the `idvorkin/idvorkin.github.io` repository 
+- **GitHub Source**: Reads markdown files directly from the `idvorkin/idvorkin.github.io` repository
 - **Simple Tools**: Each tool is just a decorated Python function - no manual protocol implementation
 - **Type Safety**: Automatic schema generation from Python type hints
 
@@ -24,11 +24,13 @@ This MCP server provides 5 tools for blog interaction:
 ### Local Development
 
 1. Install dependencies:
+
 ```bash
 pip install -r requirements.txt
 ```
 
 2. Run the server:
+
 ```bash
 python blog_mcp_server.py
 ```
@@ -82,6 +84,7 @@ Get information about Igor's blog.
 Get a random blog post from the site.
 
 **Parameters:**
+
 - `include_content` (boolean, optional): Whether to include full content (default: true)
 
 **Returns:** Random blog post with title, URL, date, and content (if requested).
@@ -91,6 +94,7 @@ Get a random blog post from the site.
 Read a specific blog post by URL.
 
 **Parameters:**
+
 - `url` (string, required): The URL of the blog post to read
 
 **Returns:** Blog post content with title, URL, date, and full content.
@@ -108,6 +112,7 @@ Get a random blog post URL.
 Search blog posts by title or content.
 
 **Parameters:**
+
 - `query` (string, required): Search query to find relevant posts
 - `limit` (integer, optional): Maximum number of results (default: 5, max: 20)
 
@@ -130,17 +135,20 @@ Or use the test script:
 ### Code Quality
 
 Format code:
+
 ```bash
 black blog_mcp_server.py
 isort blog_mcp_server.py
 ```
 
 Type checking:
+
 ```bash
 mypy blog_mcp_server.py
 ```
 
 Linting:
+
 ```bash
 ruff blog_mcp_server.py
 ```

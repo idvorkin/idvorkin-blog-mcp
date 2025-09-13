@@ -180,30 +180,58 @@ class TestE2EBlogMCPServer:
             assert len(content) > 100, "Should have substantial content"
 
     async def test_read_blog_post_with_markdown_path(self, server_endpoint: str):
-        """Test read_blog_post with markdown file paths."""
-        async with MCPTestClient(server_endpoint) as client:
-            # Test with markdown path
-            content = await client.call_tool("read_blog_post", {"url": "_d/42.md"})
-
-            # Should successfully find the post
-            assert not content.startswith("Error:"), f"Got error for markdown path: {content}"
-            assert "42" in content or "forty" in content.lower(), "Should find the 42 post"
-            assert len(content) > 100, "Should have substantial content"
-
-    async def test_read_blog_post_path_formats(self, server_endpoint: str):
-        """Test read_blog_post with various path formats."""
-        test_paths = [
-            "42",  # Without leading slash
-            "/42",  # With leading slash
-            "https://idvork.in/42",  # Full URL
-            "_d/42.md",  # Markdown path
+        """Test read_blog_post with various markdown file path formats."""
+        markdown_paths = [
+            "_d/42.md",  # Standard path
+            "/_d/42.md",  # With leading slash
+            "42.md",  # Just filename
+            "/42.md",  # Filename with leading slash
+            "https://raw.githubusercontent.com/idvorkin/idvorkin.github.io/master/_d/42.md",  # GitHub raw URL
+            "https://github.com/idvorkin/idvorkin.github.io/blob/master/_d/42.md",  # GitHub blob URL
         ]
 
         async with MCPTestClient(server_endpoint) as client:
-            for path in test_paths:
+            for md_path in markdown_paths:
+                content = await client.call_tool("read_blog_post", {"url": md_path})
+
+                # Should successfully find the post
+                assert not content.startswith("Error:"), f"Got error for markdown path '{md_path}': {content[:200]}"
+                assert "42" in content or "forty" in content.lower(), f"Should find the 42 post for path '{md_path}'"
+                assert len(content) > 100, f"Should have substantial content for path '{md_path}'"
+
+    async def test_read_blog_post_all_formats(self, server_endpoint: str):
+        """Test read_blog_post with all supported URL/path formats."""
+        test_formats = [
+            # Path formats
+            ("42", "bare path"),
+            ("/42", "absolute path"),
+
+            # URL formats
+            ("https://idvork.in/42", "full HTTPS URL"),
+            ("http://idvork.in/42", "full HTTP URL"),
+
+            # Markdown path formats
+            ("_d/42.md", "standard markdown path"),
+            ("/_d/42.md", "absolute markdown path"),
+            ("42.md", "bare filename"),
+            ("/42.md", "absolute filename"),
+
+            # GitHub URLs
+            ("https://raw.githubusercontent.com/idvorkin/idvorkin.github.io/master/_d/42.md", "GitHub raw URL"),
+            ("https://github.com/idvorkin/idvorkin.github.io/blob/master/_d/42.md", "GitHub blob URL"),
+
+            # Redirect paths
+            ("/fortytwo", "redirect path"),
+            ("fortytwo", "bare redirect path"),
+        ]
+
+        async with MCPTestClient(server_endpoint) as client:
+            for path, description in test_formats:
                 content = await client.call_tool("read_blog_post", {"url": path})
-                assert not content.startswith("Error:"), f"Failed for path format '{path}': {content[:100]}"
-                assert len(content) > 100, f"No content for path format '{path}'"
+                assert not content.startswith("Error:"), f"Failed for {description} '{path}': {content[:200]}"
+                assert len(content) > 100, f"No content for {description} '{path}'"
+                # All should resolve to the same post about 42
+                assert ("42" in content or "forty" in content.lower()), f"Wrong post for {description} '{path}'"
 
     async def test_read_blog_post_invalid_url(self, server_endpoint: str, assertions):
         """Test read_blog_post with invalid URL."""

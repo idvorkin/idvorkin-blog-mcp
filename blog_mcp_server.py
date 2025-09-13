@@ -318,16 +318,26 @@ async def read_blog_post(url: str) -> str:
                     path = "/"  # Root path
             else:
                 return "Error: URL must be from idvork.in"
-        elif url.startswith("_d/") and url.endswith(".md"):
-            # Markdown path - find corresponding URL
+        elif ".md" in url:
+            # Markdown path - just search for it in url_info
+            found = False
             for url_path, info in url_info.items():
-                if info.get("markdown_path") == url:
+                markdown_path = info.get("markdown_path", "")
+                # Simple check - does the markdown_path match or contain what was provided?
+                if markdown_path and (
+                    markdown_path == url or
+                    markdown_path.endswith(url) or
+                    url.endswith(markdown_path) or
+                    url.split("/")[-1] == markdown_path.split("/")[-1]  # Same filename
+                ):
                     path = url_path
+                    found = True
                     break
-            else:
+
+            if not found:
                 return f"Blog post not found for markdown path: {url}"
         else:
-            # Assume it's a path like /42 or /fortytwo
+            # Assume it's a path like /42 or /fortytwo or just 42
             path = url if url.startswith("/") else f"/{url}"
 
         # Check if path exists directly

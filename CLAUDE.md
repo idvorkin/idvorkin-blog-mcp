@@ -29,9 +29,34 @@ This is a Blog MCP Server built with FastMCP that provides tools for interacting
 
 The back-links.json file contains rich metadata for each blog post. Key functions now return JSON data:
 
+### Top-Level Structure
+
+The back-links.json file has two main sections:
+
+```json
+{
+  "redirects": {
+    "/fortytwo": "/42",
+    "/forty-two": "/42",
+    "/7habits": "/7-habits",
+    // ... mapping of redirect paths to target paths
+  },
+  "url_info": {
+    "/42": { /* post metadata */ },
+    "/about": { /* post metadata */ },
+    // ... one entry per blog post path
+  }
+}
+```
+
+**Important**:
+- The `redirects` field at the top level contains all URL redirects (e.g., `/fortytwo` -> `/42`)
+- The `redirect_url` field inside each `url_info` entry is currently always empty
+- When handling redirects, check the top-level `redirects` field first
+
 ### Available Data Fields
 
-Each blog post in the JSON response includes:
+Each blog post in the `url_info` section includes:
 
 - **title**: Post title
 - **url**: Full blog URL (https://idvork.in/...)
@@ -40,7 +65,9 @@ Each blog post in the JSON response includes:
 - **doc_size**: Document size in characters
 - **markdown_path**: Path to source markdown file (_d/filename.md)
 - **file_path**: Path to generated HTML file (_site/filename.html)
-- **redirect_url**: Any redirect URL for this post
+- **redirect_url**: Currently always empty (use top-level `redirects` instead)
+- **incoming_links**: Array of paths that link to this post
+- **outgoing_links**: Array of paths this post links to
 
 ### JSON Functions
 

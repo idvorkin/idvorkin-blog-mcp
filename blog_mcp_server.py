@@ -170,11 +170,8 @@ async def parse_markdown_content(file_info: dict) -> dict:
         # Clean up content - remove excessive whitespace
         content = re.sub(r"\n\s*\n", "\n\n", content).strip()
 
-        # Limit content length to prevent memory issues
-        max_content_length = 5000
-        content_text = (
-            content[:max_content_length] + "..." if len(content) > max_content_length else content
-        )
+        # Don't clip content length
+        content_text = content
         excerpt_text = content[:200] + "..." if len(content) > 200 else content
 
         return {

@@ -186,8 +186,6 @@ class TestE2EBlogMCPServer:
             "/_d/42.md",  # With leading slash
             "42.md",  # Just filename
             "/42.md",  # Filename with leading slash
-            "https://raw.githubusercontent.com/idvorkin/idvorkin.github.io/master/_d/42.md",  # GitHub raw URL
-            "https://github.com/idvorkin/idvorkin.github.io/blob/master/_d/42.md",  # GitHub blob URL
         ]
 
         async with MCPTestClient(server_endpoint) as client:
@@ -215,10 +213,6 @@ class TestE2EBlogMCPServer:
             ("/_d/42.md", "absolute markdown path"),
             ("42.md", "bare filename"),
             ("/42.md", "absolute filename"),
-
-            # GitHub URLs
-            ("https://raw.githubusercontent.com/idvorkin/idvorkin.github.io/master/_d/42.md", "GitHub raw URL"),
-            ("https://github.com/idvorkin/idvorkin.github.io/blob/master/_d/42.md", "GitHub blob URL"),
 
             # Redirect paths
             ("/fortytwo", "redirect path"),

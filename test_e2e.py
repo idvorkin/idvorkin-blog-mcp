@@ -138,11 +138,150 @@ class TestE2EBlogMCPServer:
                 title_count = content.count("Title:")
                 assert title_count <= 2, f"Limit not respected: found {title_count} results"
 
+    async def test_read_blog_post_valid_url(self, server_endpoint: str, assertions):
+        """Test read_blog_post with valid URL returns blog content."""
+        # Use a known stable blog post URL
+        valid_urls = [
+            "https://idvork.in/42",  # What I wish I knew at 42
+            "https://idvork.in/40yo",  # What I wish I knew at 40
+            "https://idvork.in/decisive",  # Decisive post
+            "https://idvork.in/gap-year",  # Gap year post
+        ]
+
+        async with MCPTestClient(server_endpoint) as client:
+            for url in valid_urls:
+                content = await client.call_tool("read_blog_post", {"url": url})
+
+                # Should not be an error
+                assert not content.startswith("Error:"), f"Got error for valid URL {url}: {content}"
+
+                # Should contain title and content
+                assert "Title:" in content or "title:" in content, f"Missing title in response for {url}"
+                assert "URL:" in content or "url:" in content, f"Missing URL in response for {url}"
+
+                # Should have substantial content (at least 100 chars)
+                assert len(content) > 100, f"Content too short for {url}: {len(content)} chars"
+
+                # Should contain the actual URL
+                assert url in content, f"URL {url} not found in response"
+
+                # Break after first successful test to avoid rate limiting
+                break
+
+    async def test_read_blog_post_with_redirect(self, server_endpoint: str):
+        """Test read_blog_post with redirect URLs."""
+        async with MCPTestClient(server_endpoint) as client:
+            # Test redirect URL - /fortytwo redirects to /42
+            content = await client.call_tool("read_blog_post", {"url": "/fortytwo"})
+
+            # Should get the /42 post via redirect
+            assert not content.startswith("Error:"), f"Got error for redirect URL: {content}"
+            assert ("redirect" in content.lower() or "42" in content), "Should indicate redirect or show /42 content"
+            assert len(content) > 100, "Should have substantial content"
+
+    async def test_read_blog_post_with_markdown_path(self, server_endpoint: str):
+        """Test read_blog_post with various markdown file path formats."""
+        markdown_paths = [
+            "_d/42.md",  # Standard path
+            "/_d/42.md",  # With leading slash
+            "42.md",  # Just filename
+            "/42.md",  # Filename with leading slash
+        ]
+
+        async with MCPTestClient(server_endpoint) as client:
+            for md_path in markdown_paths:
+                content = await client.call_tool("read_blog_post", {"url": md_path})
+
+                # Should successfully find the post
+                assert not content.startswith("Error:"), f"Got error for markdown path '{md_path}': {content[:200]}"
+                assert "42" in content or "forty" in content.lower(), f"Should find the 42 post for path '{md_path}'"
+                assert len(content) > 100, f"Should have substantial content for path '{md_path}'"
+
+    async def test_read_blog_post_all_formats(self, server_endpoint: str):
+        """Test read_blog_post with all supported URL/path formats."""
+        test_formats = [
+            # Path formats
+            ("42", "bare path"),
+            ("/42", "absolute path"),
+
+            # URL formats
+            ("https://idvork.in/42", "full HTTPS URL"),
+            ("http://idvork.in/42", "full HTTP URL"),
+
+            # Markdown path formats
+            ("_d/42.md", "standard markdown path"),
+            ("/_d/42.md", "absolute markdown path"),
+            ("42.md", "bare filename"),
+            ("/42.md", "absolute filename"),
+
+            # Redirect paths
+            ("/fortytwo", "redirect path"),
+            ("fortytwo", "bare redirect path"),
+        ]
+
+        async with MCPTestClient(server_endpoint) as client:
+            for path, description in test_formats:
+                content = await client.call_tool("read_blog_post", {"url": path})
+                assert not content.startswith("Error:"), f"Failed for {description} '{path}': {content[:200]}"
+                assert len(content) > 100, f"No content for {description} '{path}'"
+                # All should resolve to the same post about 42
+                assert ("42" in content or "forty" in content.lower()), f"Wrong post for {description} '{path}'"
+
     async def test_read_blog_post_invalid_url(self, server_endpoint: str, assertions):
         """Test read_blog_post with invalid URL."""
         async with MCPTestClient(server_endpoint) as client:
             content = await client.call_tool("read_blog_post", {"url": ""})
             assertions.assert_error_message(content, "Error: URL must be a non-empty string")
+
+    async def test_read_blog_post_from_posts_directory(self, server_endpoint: str):
+        """Test read_blog_post can access posts from _posts/ directory."""
+        async with MCPTestClient(server_endpoint) as client:
+            # Test a post from _posts/ directory
+            test_posts = [
+                "_posts/2018-01-04-7-habits.md",
+                "2018-01-04-7-habits.md",  # Just filename
+                "/7-habits",  # URL path
+            ]
+
+            for post_path in test_posts:
+                content = await client.call_tool("read_blog_post", {"url": post_path})
+                # At least one should work
+                if not content.startswith("Error:"):
+                    assert "habit" in content.lower() or "7" in content, f"Should find 7 habits post for {post_path}"
+                    assert len(content) > 100, f"Should have content for {post_path}"
+                    break
+            else:
+                pytest.fail("Could not access any _posts/ directory posts")
+
+    async def test_all_blog_posts_includes_all_directories(self, server_endpoint: str):
+        """Test all_blog_posts includes posts from _d/, _posts/, and td/ directories."""
+        async with MCPTestClient(server_endpoint) as client:
+            content = await client.call_tool("all_blog_posts", {})
+
+            import json
+            data = json.loads(content)
+
+            # Count posts from different directories
+            d_posts = 0
+            posts_posts = 0
+            td_posts = 0
+
+            for post in data.get("posts", []):
+                markdown_path = post.get("markdown_path", "")
+                if markdown_path.startswith("_d/"):
+                    d_posts += 1
+                elif markdown_path.startswith("_posts/"):
+                    posts_posts += 1
+                elif markdown_path.startswith("td/"):
+                    td_posts += 1
+
+            # Should have posts from at least _d/ and _posts/
+            assert d_posts > 0, "Should have posts from _d/ directory"
+            assert posts_posts > 0, "Should have posts from _posts/ directory"
+            # td/ might be empty, so we don't assert on it
+
+            # Total should be more than just _d/ posts
+            assert data["count"] > 200, f"Should have more than 200 posts total, got {data['count']}"
 
     async def test_read_blog_post_nonexistent_url(self, server_endpoint: str, assertions):
         """Test read_blog_post with nonexistent URL."""
@@ -231,11 +370,11 @@ class TestE2EBlogMCPServer:
                 "query": "the",  # Very common word that should match posts
                 "limit": 3
             })
-            
+
             # Should return valid JSON
             import json
             data = json.loads(content)
-            
+
             # Check if we got results or error
             if "error" in data:
                 # If no results, that's also valid JSON
@@ -251,17 +390,17 @@ class TestE2EBlogMCPServer:
                 assert data["query"] == "the"
                 assert data["limit"] == 3
                 assert data["count"] <= 3
-                
+
                 # If posts exist, check structure
                 if data["posts"]:
                     post = data["posts"][0]
                     required_fields = ["title", "url", "description", "last_modified", "doc_size", "markdown_path", "file_path", "redirect_url"]
                     for field in required_fields:
                         assert field in post, f"Missing field: {field}"
-                    
+
                     # Verify URL format
                     assert post["url"].startswith("https://idvork.in/")
-                    
+
                     # Verify markdown path format
                     assert post["markdown_path"].startswith("_d/")
                     assert post["markdown_path"].endswith(".md")

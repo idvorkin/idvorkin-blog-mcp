@@ -105,9 +105,14 @@ async def get_blog_files() -> list[dict]:
 
         blog_files = []
         for url, info in url_info.items():
-            # Skip non-blog posts (pages without markdown_path or not in _d directory)
+            # Include blog posts from _d/, _posts/, and td/ directories
             markdown_path = info.get("markdown_path", "")
-            if not markdown_path or not markdown_path.startswith("_d/"):
+            if not markdown_path:
+                continue
+            # Include posts from _d/, _posts/, and td/ directories
+            if not (markdown_path.startswith("_d/") or
+                    markdown_path.startswith("_posts/") or
+                    markdown_path.startswith("td/")):
                 continue
 
             # Convert back-links format to old blog files format for compatibility
@@ -120,7 +125,7 @@ async def get_blog_files() -> list[dict]:
             blog_files.append(blog_file)
 
         logger.info(f"Found {len(blog_files)} blog files (optimized)")
-        return blog_files[:50]  # Limit to 50 posts for compatibility
+        return blog_files  # Return all blog files
 
     except Exception as e:
         logger.error(f"Error getting blog files: {e}")
@@ -256,9 +261,13 @@ async def all_blog_posts() -> str:
         # Collect all blog posts with their metadata
         blog_posts = []
         for url, info in url_info.items():
-            # Skip non-blog posts
+            # Include posts from _d/, _posts/, and td/ directories
             markdown_path = info.get("markdown_path", "")
-            if not markdown_path or not markdown_path.startswith("_d/"):
+            if not markdown_path:
+                continue
+            if not (markdown_path.startswith("_d/") or
+                    markdown_path.startswith("_posts/") or
+                    markdown_path.startswith("td/")):
                 continue
 
             # Return rich data from back-links
@@ -299,17 +308,57 @@ async def all_blog_posts() -> str:
 
 @mcp.tool
 async def read_blog_post(url: str) -> str:
-    """Read a specific blog post by URL"""
+    """Read a specific blog post by URL, redirect path, or markdown path (e.g., _d/42.md)"""
     if not url or not isinstance(url, str) or len(url.strip()) == 0:
         return "Error: URL must be a non-empty string"
 
+    url = url.strip()
+
     try:
-        # Try to find the file by URL
-        blog_files = await get_blog_files()
-        for file_info in blog_files:
-            if file_info["html_url"] == url.strip():
-                blog_post = await parse_markdown_content(file_info)
-                return f"""Blog Post:
+        blog_data = await get_blog_data()
+        url_info = blog_data.get("url_info", {})
+
+        # Handle different URL formats
+        if url.startswith("http"):
+            # Full URL - extract path
+            if "idvork.in" in url:
+                path = url.replace("https://idvork.in", "").replace("http://idvork.in", "")
+                if not path:
+                    path = "/"  # Root path
+            else:
+                return "Error: URL must be from idvork.in"
+        elif ".md" in url:
+            # Markdown path - just search for it in url_info
+            found = False
+            for url_path, info in url_info.items():
+                markdown_path = info.get("markdown_path", "")
+                # Simple check - does the markdown_path match or contain what was provided?
+                if markdown_path and (
+                    markdown_path == url or
+                    markdown_path.endswith(url) or
+                    url.endswith(markdown_path) or
+                    url.split("/")[-1] == markdown_path.split("/")[-1]  # Same filename
+                ):
+                    path = url_path
+                    found = True
+                    break
+
+            if not found:
+                return f"Blog post not found for markdown path: {url}"
+        else:
+            # Assume it's a path like /42 or /fortytwo or just 42
+            path = url if url.startswith("/") else f"/{url}"
+
+        # Check if path exists directly
+        if path in url_info:
+            markdown_path = url_info[path].get("markdown_path", "")
+            if markdown_path:
+                # Found it! Get the file
+                blog_files = await get_blog_files()
+                for file_info in blog_files:
+                    if file_info["path"] == markdown_path:
+                        blog_post = await parse_markdown_content(file_info)
+                        return f"""Blog Post:
 
 Title: {blog_post["title"]}
 URL: {blog_post["url"]}
@@ -319,7 +368,28 @@ Content:
 {blog_post["content"]}
 """
 
-        return "Blog post not found in GitHub repository"
+        # Check redirects - look for any post that redirects from this path
+        blog_files = await get_blog_files()
+        for file_info in blog_files:
+            # Fetch the markdown to check redirect_from
+            try:
+                markdown_content = await fetch_url(file_info["download_url"])
+                # Check if this post has redirect_from that matches our path
+                if f"- {path}" in markdown_content or f"/{path.lstrip('/')}" in markdown_content:
+                    blog_post = await parse_markdown_content(file_info)
+                    return f"""Blog Post (via redirect from {path}):
+
+Title: {blog_post["title"]}
+URL: {blog_post["url"]}
+Date: {blog_post["date"] or "Unknown"}
+
+Content:
+{blog_post["content"]}
+"""
+            except:
+                continue
+
+        return f"Blog post not found for: {url}"
 
     except Exception as e:
         logger.error(f"Unexpected error in read_blog_post: {e}")
@@ -370,9 +440,13 @@ async def blog_search(query: str, limit: int = 5) -> str:
         # Search through blog posts using pre-processed metadata
         matching_posts = []
         for url, info in url_info.items():
-            # Skip non-blog posts
+            # Include posts from _d/, _posts/, and td/ directories
             markdown_path = info.get("markdown_path", "")
-            if not markdown_path or not markdown_path.startswith("_d/"):
+            if not markdown_path:
+                continue
+            if not (markdown_path.startswith("_d/") or
+                    markdown_path.startswith("_posts/") or
+                    markdown_path.startswith("td/")):
                 continue
 
             # Search in title and description (no need to download full content)
@@ -435,9 +509,13 @@ async def recent_blog_posts(limit: int = 20) -> str:
         # Collect all blog posts with their metadata
         blog_posts = []
         for url, info in url_info.items():
-            # Skip non-blog posts
+            # Include posts from _d/, _posts/, and td/ directories
             markdown_path = info.get("markdown_path", "")
-            if not markdown_path or not markdown_path.startswith("_d/"):
+            if not markdown_path:
+                continue
+            if not (markdown_path.startswith("_d/") or
+                    markdown_path.startswith("_posts/") or
+                    markdown_path.startswith("td/")):
                 continue
 
             # Return rich data from back-links

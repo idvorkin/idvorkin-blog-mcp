@@ -68,7 +68,58 @@ serve:
 # Run the blog MCP server with HTTP transport for development
 serve-http port="8000":
     @echo "Starting MCP server on HTTP transport at http://localhost:{{port}}"
+    @echo "Use MCP_SERVER_ENDPOINT=http://localhost:{{port}}/mcp for tool commands"
     uv run python -c "from blog_mcp_server import mcp; mcp.run(transport='http', host='127.0.0.1', port={{port}})"
+
+# Read a specific blog post by URL (requires server running)
+read_blog_post url:
+    @echo "📖 Reading blog post: {{url}}"
+    @uv run python mcp_cli.py read_blog_post '{"url":"{{url}}"}'
+
+# Search blog posts (requires server running)
+blog_search query limit="5":
+    @echo "🔍 Searching for: {{query}} (limit: {{limit}})"
+    @uv run python mcp_cli.py blog_search '{"query":"{{query}}","limit":{{limit}}}'
+
+# Get recent blog posts (requires server running)
+recent_blog_posts limit="5":
+    @echo "📰 Getting {{limit}} recent posts..."
+    @uv run python mcp_cli.py recent_blog_posts '{"limit":{{limit}}}'
+
+# Get random blog post with content (requires server running)
+random_blog:
+    @echo "🎲 Getting random blog post..."
+    @uv run python mcp_cli.py random_blog '{"include_content":true}'
+
+# Get random blog URL only (requires server running)
+random_blog_url:
+    @echo "🎲 Getting random blog URL..."
+    @uv run python mcp_cli.py random_blog_url
+
+# Get blog info (requires server running)
+blog_info:
+    @echo "ℹ️ Getting blog info..."
+    @uv run python mcp_cli.py blog_info
+
+# Get all blog posts (requires server running)
+all_blog_posts:
+    @echo "📚 Getting all blog posts..."
+    @uv run python mcp_cli.py all_blog_posts
+
+# Generic tool caller for any MCP tool with JSON arguments (requires server running)
+call tool args="{}":
+    @echo "🔧 Calling tool: {{tool}} with args: {{args}}"
+    @uv run python mcp_cli.py {{tool}} '{{args}}'
+
+# Call tool against production server
+call-prod tool args="{}":
+    @echo "🌐 Calling {{tool}} on PRODUCTION server"
+    @MCP_SERVER_ENDPOINT="https://idvorkin-blog-mcp.fastmcp.app/mcp" uv run python mcp_cli.py {{tool}} '{{args}}'
+
+# Call tool against local server (explicit)
+call-local tool args="{}":
+    @echo "🏠 Calling {{tool}} on LOCAL server"
+    @MCP_SERVER_ENDPOINT="http://localhost:8000/mcp" uv run python mcp_cli.py {{tool}} '{{args}}'
 
 # Deploy to Google Cloud Run (requires gcloud CLI setup)
 deploy project_id="" region="us-central1":

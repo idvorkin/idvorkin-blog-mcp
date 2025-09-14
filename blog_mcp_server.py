@@ -331,6 +331,7 @@ async def read_blog_post(url: str) -> str:
     try:
         blog_data = await get_blog_data()
         url_info = blog_data.get("url_info", {})
+        redirects = blog_data.get("redirects", {})  # Get top-level redirects
 
         # Handle different URL formats
         if url.startswith("http"):
@@ -372,8 +373,19 @@ async def read_blog_post(url: str) -> str:
                 if blog_post:
                     return format_blog_post(blog_post)
 
-        # Check redirects using back-links data (much faster than downloading all files!)
-        # Look through url_info to find any post that redirects to this path
+        # Check top-level redirects first
+        if path in redirects:
+            # Found a redirect! Follow it to the target path
+            target_path = redirects[path]
+            if target_path in url_info:
+                markdown_path = url_info[target_path].get("markdown_path", "")
+                if markdown_path:
+                    blog_post = await get_blog_post_by_markdown_path(markdown_path)
+                    if blog_post:
+                        return format_blog_post(blog_post, f"Blog Post (via redirect from {path})")
+
+        # FALLBACK: Check deprecated redirect_url in url_info (for backward compatibility)
+        # TODO: This can be removed in a future update when all redirects are moved to top-level 'redirects'
         for url_path, info in url_info.items():
             redirect_url = info.get("redirect_url", "")
             if redirect_url and (redirect_url == path or redirect_url == path.lstrip("/")):
@@ -382,7 +394,12 @@ async def read_blog_post(url: str) -> str:
                 if markdown_path:
                     blog_post = await get_blog_post_by_markdown_path(markdown_path)
                     if blog_post:
-                        return format_blog_post(blog_post, f"Blog Post (via redirect from {path})")
+                        return format_blog_post(blog_post, f"Blog Post (via deprecated redirect from {path})")
+
+        # Future improvements:
+        # - Consider implementing recursive redirect resolution with depth limit
+        # - Add case-insensitive redirect matching
+        # - Implement more detailed error logging for failed redirects
 
         return f"Blog post not found for: {url}"
 

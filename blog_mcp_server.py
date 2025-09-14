@@ -384,8 +384,8 @@ async def read_blog_post(url: str) -> str:
                     if blog_post:
                         return format_blog_post(blog_post, f"Blog Post (via redirect from {path})")
 
-        # Check redirects using back-links data (much faster than downloading all files!)
-        # Look through url_info to find any post that redirects to this path
+        # FALLBACK: Check deprecated redirect_url in url_info (for backward compatibility)
+        # TODO: This can be removed in a future update when all redirects are moved to top-level 'redirects'
         for url_path, info in url_info.items():
             redirect_url = info.get("redirect_url", "")
             if redirect_url and (redirect_url == path or redirect_url == path.lstrip("/")):
@@ -394,7 +394,12 @@ async def read_blog_post(url: str) -> str:
                 if markdown_path:
                     blog_post = await get_blog_post_by_markdown_path(markdown_path)
                     if blog_post:
-                        return format_blog_post(blog_post, f"Blog Post (via redirect from {path})")
+                        return format_blog_post(blog_post, f"Blog Post (via deprecated redirect from {path})")
+
+        # Future improvements:
+        # - Consider implementing recursive redirect resolution with depth limit
+        # - Add case-insensitive redirect matching
+        # - Implement more detailed error logging for failed redirects
 
         return f"Blog post not found for: {url}"
 

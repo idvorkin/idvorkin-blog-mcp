@@ -580,6 +580,13 @@ async def get_recent_changes(
     if commits is not None and commits <= 0:
         return "Error: 'commits' must be a positive number."
 
+    # Validate that if include_diff is true, path must be a specific file (not a directory)
+    if include_diff and path:
+        if path.endswith('/'):
+            return "Error: When include_diff is true, path must be a specific file, not a directory."
+        if not path.endswith('.md'):
+            return "Error: When include_diff is true, path must be a markdown file (ending in .md)."
+
     # Set defaults
     if days is None and commits is None:
         commits = 10

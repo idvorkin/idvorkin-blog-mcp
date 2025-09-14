@@ -274,6 +274,22 @@ class TestBlogMCPServer:
             content = await client.call_tool("get_recent_changes", {"commits": -5})
             assertions.assert_error_message(content, "'commits' must be a positive number")
 
+            # Test include_diff with directory path
+            content = await client.call_tool("get_recent_changes", {
+                "include_diff": True,
+                "path": "_d/",
+                "commits": 1
+            })
+            assertions.assert_error_message(content, "When include_diff is true, path must be a specific file, not a directory")
+
+            # Test include_diff with non-markdown file
+            content = await client.call_tool("get_recent_changes", {
+                "include_diff": True,
+                "path": "_d/test.txt",
+                "commits": 1
+            })
+            assertions.assert_error_message(content, "When include_diff is true, path must be a markdown file")
+
     @patch('blog_mcp_server.httpx.AsyncClient')
     async def test_get_recent_changes_with_diff_mock(self, mock_client_class, mcp_server, assertions):
         """Test get_recent_changes with include_diff enabled - MOCKED."""
@@ -296,7 +312,8 @@ class TestBlogMCPServer:
         async with MCPTestClient(mcp_server) as client:
             content = await client.call_tool("get_recent_changes", {
                 "commits": 1,
-                "include_diff": True
+                "include_diff": True,
+                "path": "_d/ai-thoughts.md"  # Must specify a file path when include_diff is true
             })
             # Should return changes with diff
             assert "Recent changes" in content

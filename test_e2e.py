@@ -487,13 +487,22 @@ class TestE2EBlogMCPServer:
     async def test_get_recent_changes_with_diff(self, server_endpoint: str):
         """Test get_recent_changes with include_diff enabled."""
         async with MCPTestClient(server_endpoint) as client:
+            # Test with directory path should fail
             content = await client.call_tool("get_recent_changes", {
                 "commits": 2,
-                "include_diff": True
+                "include_diff": True,
+                "path": "_d/"
             })
+            assert "When include_diff is true, path must be a specific file" in content, "Should reject directory with include_diff"
 
-            # Should return changes
-            assert "Recent changes" in content, "Should have header"
+            # Test with specific file should work
+            content = await client.call_tool("get_recent_changes", {
+                "commits": 2,
+                "include_diff": True,
+                "path": "_d/ai-thoughts.md"
+            })
+            # Should return changes (or no commits found for that file)
+            assert ("Recent changes" in content or "No commits found" in content), "Should have valid response"
             assert not content.startswith("Error:"), "Should not be an error"
 
             # If there are file changes with diffs available, should see diff content

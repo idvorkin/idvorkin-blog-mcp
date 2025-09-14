@@ -3,7 +3,7 @@
 Blog MCP Server
 
 A FastMCP server that provides tools for interacting with Igor's blog at idvork.in.
-This server offers seven tools:
+This server offers eight tools:
 - blog_info: Get information about the blog
 - random_blog: Get a random blog post
 - read_blog_post: Read a specific blog post by URL
@@ -11,13 +11,16 @@ This server offers seven tools:
 - blog_search: Search blog posts (returns JSON)
 - recent_blog_posts: Get the most recent blog posts (returns JSON)
 - all_blog_posts: Get all blog posts (returns JSON)
+- get_recent_changes: Get recent changes/commits from the GitHub repository
 """
 
+import asyncio
 import json
 import logging
 import random
 import re
 import time
+from datetime import datetime, timedelta
 from typing import Optional
 
 import httpx
@@ -132,6 +135,28 @@ async def get_blog_files() -> list[dict]:
         return []
 
 
+async def get_blog_post_by_markdown_path(markdown_path: str) -> Optional[dict]:
+    """Helper to fetch and parse a specific blog post by its markdown path."""
+    blog_files = await get_blog_files()
+    for file_info in blog_files:
+        if file_info["path"] == markdown_path:
+            return await parse_markdown_content(file_info)
+    return None
+
+
+def format_blog_post(blog_post: dict, prefix: str = "Blog Post") -> str:
+    """Format a blog post dict into a readable string."""
+    return f"""{prefix}:
+
+Title: {blog_post["title"]}
+URL: {blog_post["url"]}
+Date: {blog_post["date"] or "Unknown"}
+
+Content:
+{blog_post["content"]}
+"""
+
+
 async def parse_markdown_content(file_info: dict) -> dict:
     """Parse markdown content and extract title, content, and metadata."""
     try:
@@ -228,15 +253,7 @@ async def random_blog(include_content: bool = True) -> str:
 
         if include_content:
             blog_post = await parse_markdown_content(random_file)
-            return f"""Random Blog Post:
-
-Title: {blog_post["title"]}
-URL: {blog_post["url"]}
-Date: {blog_post["date"] or "Unknown"}
-
-Content:
-{blog_post["content"]}
-"""
+            return format_blog_post(blog_post, "Random Blog Post")
         else:
             return f"Random blog post URL: {random_file['html_url']}"
 
@@ -351,40 +368,21 @@ async def read_blog_post(url: str) -> str:
             markdown_path = url_info[path].get("markdown_path", "")
             if markdown_path:
                 # Found it! Get the file
-                blog_files = await get_blog_files()
-                for file_info in blog_files:
-                    if file_info["path"] == markdown_path:
-                        blog_post = await parse_markdown_content(file_info)
-                        return f"""Blog Post:
+                blog_post = await get_blog_post_by_markdown_path(markdown_path)
+                if blog_post:
+                    return format_blog_post(blog_post)
 
-Title: {blog_post["title"]}
-URL: {blog_post["url"]}
-Date: {blog_post["date"] or "Unknown"}
-
-Content:
-{blog_post["content"]}
-"""
-
-        # Check redirects - look for any post that redirects from this path
-        blog_files = await get_blog_files()
-        for file_info in blog_files:
-            # Fetch the markdown to check redirect_from
-            try:
-                markdown_content = await fetch_url(file_info["download_url"])
-                # Check if this post has redirect_from that matches our path
-                if f"- {path}" in markdown_content or f"/{path.lstrip('/')}" in markdown_content:
-                    blog_post = await parse_markdown_content(file_info)
-                    return f"""Blog Post (via redirect from {path}):
-
-Title: {blog_post["title"]}
-URL: {blog_post["url"]}
-Date: {blog_post["date"] or "Unknown"}
-
-Content:
-{blog_post["content"]}
-"""
-            except:
-                continue
+        # Check redirects using back-links data (much faster than downloading all files!)
+        # Look through url_info to find any post that redirects to this path
+        for url_path, info in url_info.items():
+            redirect_url = info.get("redirect_url", "")
+            if redirect_url and (redirect_url == path or redirect_url == path.lstrip("/")):
+                # Found a post that redirects to our path
+                markdown_path = info.get("markdown_path", "")
+                if markdown_path:
+                    blog_post = await get_blog_post_by_markdown_path(markdown_path)
+                    if blog_post:
+                        return format_blog_post(blog_post, f"Blog Post (via redirect from {path})")
 
         return f"Blog post not found for: {url}"
 
@@ -553,6 +551,194 @@ async def recent_blog_posts(limit: int = 20) -> str:
 
     except Exception as e:
         return json.dumps({"error": f"Error getting recent blog posts: {str(e)}"})
+
+
+@mcp.tool
+async def get_recent_changes(
+    path: Optional[str] = None,
+    days: Optional[int] = None,
+    commits: Optional[int] = None,
+    include_diff: bool = False
+) -> str:
+    """Get recent changes from the GitHub repository for blog posts.
+
+    Parameters:
+    - path: Optional file/directory path to filter changes (e.g., "_d/", "_posts/", "td/")
+    - days: Number of days to look back (mutually exclusive with commits)
+    - commits: Number of recent commits to include (mutually exclusive with days, default: 10)
+    - include_diff: Whether to include the actual diff content (default: False)
+
+    Returns formatted list of recent commits with file changes.
+    """
+    # Validate parameters
+    if days is not None and commits is not None:
+        return "Error: Cannot specify both 'days' and 'commits' parameters. Choose one."
+
+    if days is not None and days <= 0:
+        return "Error: 'days' must be a positive number."
+
+    if commits is not None and commits <= 0:
+        return "Error: 'commits' must be a positive number."
+
+    # Validate that if include_diff is true, path must be a specific file (not a directory)
+    if include_diff and path:
+        if path.endswith('/'):
+            return "Error: When include_diff is true, path must be a specific file, not a directory."
+        if not path.endswith('.md'):
+            return "Error: When include_diff is true, path must be a markdown file (ending in .md)."
+
+    # Set defaults
+    if days is None and commits is None:
+        commits = 10
+
+    # If commits specified, ensure it's reasonable
+    if commits and commits > 100:
+        commits = 100  # Cap at 100 to avoid excessive API calls
+
+    try:
+        # Build query parameters for commits endpoint
+        params = {
+            "per_page": commits if commits else 100  # Get more if filtering by date
+        }
+
+        # Add path filter if specified
+        if path:
+            # Ensure path doesn't start with / for GitHub API
+            if path.startswith("/"):
+                path = path[1:]
+            params["path"] = path
+
+        # Add date filter if specified
+        if days:
+            since_date = datetime.now() - timedelta(days=days)
+            params["since"] = since_date.isoformat() + "Z"
+
+        # Fetch commits list
+        commits_url = f"{GITHUB_REPO_URL}/commits"
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            logger.info(f"Fetching commits from GitHub: {commits_url}")
+            response = await client.get(commits_url, params=params)
+            response.raise_for_status()
+            commits_data = response.json()
+
+        if not commits_data:
+            return "No commits found for the specified criteria."
+
+        # If we're filtering by days and got too many, limit them
+        if days and len(commits_data) > 50:
+            commits_data = commits_data[:50]
+
+        # Fetch detailed commit info in parallel (with file changes)
+        # Use semaphore to limit concurrent requests to 15
+        semaphore = asyncio.Semaphore(15)
+
+        async def fetch_commit_details(commit_sha: str) -> dict:
+            async with semaphore:
+                async with httpx.AsyncClient(timeout=30.0) as client:
+                    commit_url = f"{GITHUB_REPO_URL}/commits/{commit_sha}"
+                    try:
+                        response = await client.get(commit_url)
+                        response.raise_for_status()
+                        return response.json()
+                    except Exception as e:
+                        logger.error(f"Error fetching commit {commit_sha}: {e}")
+                        return None
+
+        # Fetch all commit details in parallel
+        tasks = [fetch_commit_details(commit["sha"]) for commit in commits_data]
+        detailed_commits = await asyncio.gather(*tasks)
+
+        # Filter out failed fetches
+        detailed_commits = [c for c in detailed_commits if c is not None]
+
+        if not detailed_commits:
+            return "Error: Failed to fetch commit details."
+
+        # Format the output
+        output_lines = []
+
+        # Add header
+        if days:
+            output_lines.append(f"Recent changes (last {days} days):")
+        else:
+            output_lines.append(f"Recent changes (last {len(detailed_commits)} commits):")
+        output_lines.append("")
+
+        for commit in detailed_commits:
+            # Calculate relative time
+            commit_date = datetime.fromisoformat(commit["commit"]["author"]["date"].replace("Z", "+00:00"))
+            now = datetime.now(commit_date.tzinfo)
+            delta = now - commit_date
+
+            if delta.days > 0:
+                time_ago = f"{delta.days} day{'s' if delta.days != 1 else ''} ago"
+            elif delta.seconds > 3600:
+                hours = delta.seconds // 3600
+                time_ago = f"{hours} hour{'s' if hours != 1 else ''} ago"
+            else:
+                minutes = delta.seconds // 60
+                time_ago = f"{minutes} minute{'s' if minutes != 1 else ''} ago"
+
+            # Add commit info
+            output_lines.append(f"Commit: {commit['sha'][:7]} ({time_ago})")
+            output_lines.append(f"Author: {commit['commit']['author']['name']}")
+            output_lines.append(f"Message: {commit['commit']['message'].split('\n')[0]}")  # First line only
+
+            # Add file changes - filter for blog files if no specific path was given
+            if "files" in commit:
+                blog_files = []
+                for file in commit["files"]:
+                    filename = file["filename"]
+                    # If no path filter, only show blog-related files
+                    if not path:
+                        if not (filename.startswith("_d/") or
+                                filename.startswith("_posts/") or
+                                filename.startswith("td/")):
+                            continue
+                    blog_files.append(file)
+
+                if blog_files:
+                    output_lines.append("Files changed:")
+                    for file in blog_files:
+                        status = file["status"]
+                        additions = file.get("additions", 0)
+                        deletions = file.get("deletions", 0)
+
+                        if status == "added":
+                            change_str = f"+{additions} lines (new file)"
+                        elif status == "removed":
+                            change_str = f"-{deletions} lines (deleted)"
+                        elif status == "renamed":
+                            change_str = f"renamed from {file.get('previous_filename', '?')}"
+                        else:  # modified
+                            change_str = f"+{additions} -{deletions} lines"
+
+                        output_lines.append(f"  - {file['filename']}: {change_str}")
+
+                        # Include diff if requested and available
+                        if include_diff and "patch" in file:
+                            output_lines.append("    Diff:")
+                            # Limit diff output to first 10 lines
+                            diff_lines = file["patch"].split("\n")[:10]
+                            for diff_line in diff_lines:
+                                output_lines.append(f"      {diff_line}")
+                            if len(file["patch"].split("\n")) > 10:
+                                output_lines.append("      ... (diff truncated)")
+
+            output_lines.append("")  # Empty line between commits
+
+        return "\n".join(output_lines)
+
+    except httpx.HTTPStatusError as e:
+        if e.response.status_code == 404:
+            return f"Error: Repository or path not found. Path: {path or 'root'}"
+        elif e.response.status_code == 403:
+            return "Error: GitHub API rate limit exceeded. Please try again later."
+        else:
+            return f"Error: GitHub API returned status {e.response.status_code}"
+    except Exception as e:
+        logger.error(f"Error in get_recent_changes: {e}")
+        return f"Error getting recent changes: {str(e)}"
 
 
 if __name__ == "__main__":

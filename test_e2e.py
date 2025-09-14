@@ -51,7 +51,8 @@ class TestE2EBlogMCPServer:
             "random_blog_url",
             "blog_search",
             "recent_blog_posts",
-            "all_blog_posts"
+            "all_blog_posts",
+            "get_recent_changes"
         }
 
         async with MCPTestClient(server_endpoint) as client:
@@ -404,6 +405,124 @@ class TestE2EBlogMCPServer:
                     # Verify markdown path format
                     assert post["markdown_path"].startswith("_d/")
                     assert post["markdown_path"].endswith(".md")
+
+    async def test_get_recent_changes_default(self, server_endpoint: str):
+        """Test get_recent_changes with default parameters."""
+        async with MCPTestClient(server_endpoint) as client:
+            content = await client.call_tool("get_recent_changes", {})
+
+            # Should return recent changes
+            assert "Recent changes" in content, "Should have header"
+            assert "Commit:" in content or "No commits found" in content, "Should have commits or no commits message"
+
+            # If we have commits, verify structure
+            if "Commit:" in content:
+                assert "Author:" in content, "Should have author info"
+                assert "Message:" in content, "Should have commit message"
+                # Should have relative time like "2 days ago"
+                assert "ago" in content, "Should have relative time"
+
+    async def test_get_recent_changes_with_commits_limit(self, server_endpoint: str):
+        """Test get_recent_changes with specific number of commits."""
+        async with MCPTestClient(server_endpoint) as client:
+            content = await client.call_tool("get_recent_changes", {"commits": 3})
+
+            # Should mention the number of commits
+            assert "Recent changes (last" in content, "Should specify number of commits"
+            assert not content.startswith("Error:"), "Should not be an error"
+
+            # Count number of commits returned (each starts with "Commit:")
+            if "Commit:" in content:
+                commit_count = content.count("Commit:")
+                assert commit_count <= 3, f"Should return at most 3 commits, got {commit_count}"
+
+    async def test_get_recent_changes_with_days(self, server_endpoint: str):
+        """Test get_recent_changes with days parameter."""
+        async with MCPTestClient(server_endpoint) as client:
+            content = await client.call_tool("get_recent_changes", {"days": 30})
+
+            # Should mention last N days
+            assert "Recent changes (last 30 days)" in content or "No commits found" in content
+            assert not content.startswith("Error:"), "Should not be an error"
+
+    async def test_get_recent_changes_with_path_filter(self, server_endpoint: str):
+        """Test get_recent_changes with path filter."""
+        async with MCPTestClient(server_endpoint) as client:
+            # Test with _d/ path filter
+            content = await client.call_tool("get_recent_changes", {
+                "path": "_d/",
+                "commits": 5
+            })
+
+            # Should return changes or indicate no commits found
+            assert "Recent changes" in content or "No commits found" in content
+
+            # If we have file changes, they should all be in _d/
+            if "Files changed:" in content:
+                # Extract lines with file paths (start with "  - ")
+                file_lines = [line for line in content.split("\n") if line.strip().startswith("- ")]
+                for line in file_lines:
+                    # File paths should start with _d/
+                    if ".md" in line:  # Only check markdown files
+                        assert "_d/" in line, f"File should be in _d/ directory: {line}"
+
+    async def test_get_recent_changes_invalid_params(self, server_endpoint: str):
+        """Test get_recent_changes with invalid parameter combinations."""
+        async with MCPTestClient(server_endpoint) as client:
+            # Test both days and commits specified (mutually exclusive)
+            content = await client.call_tool("get_recent_changes", {
+                "days": 7,
+                "commits": 10
+            })
+            assert "Cannot specify both 'days' and 'commits'" in content, "Should reject both params"
+
+            # Test negative days
+            content = await client.call_tool("get_recent_changes", {"days": -1})
+            assert "'days' must be a positive number" in content, "Should reject negative days"
+
+            # Test negative commits
+            content = await client.call_tool("get_recent_changes", {"commits": -5})
+            assert "'commits' must be a positive number" in content, "Should reject negative commits"
+
+    async def test_get_recent_changes_with_diff(self, server_endpoint: str):
+        """Test get_recent_changes with include_diff enabled."""
+        async with MCPTestClient(server_endpoint) as client:
+            # Test with directory path should fail
+            content = await client.call_tool("get_recent_changes", {
+                "commits": 2,
+                "include_diff": True,
+                "path": "_d/"
+            })
+            assert "When include_diff is true, path must be a specific file" in content, "Should reject directory with include_diff"
+
+            # Test with specific file should work
+            content = await client.call_tool("get_recent_changes", {
+                "commits": 2,
+                "include_diff": True,
+                "path": "_d/ai-thoughts.md"
+            })
+            # Should return changes (or no commits found for that file)
+            assert ("Recent changes" in content or "No commits found" in content), "Should have valid response"
+            assert not content.startswith("Error:"), "Should not be an error"
+
+            # If there are file changes with diffs available, should see diff content
+            if "Files changed:" in content and "Diff:" in content:
+                # Should have diff indicators like @@ or +/- lines
+                assert ("@@" in content or "+" in content or "-" in content), "Should have diff content"
+
+    async def test_get_recent_changes_performance(self, server_endpoint: str):
+        """Test get_recent_changes handles parallel requests efficiently."""
+        import time
+
+        async with MCPTestClient(server_endpoint) as client:
+            # Time fetching 10 commits (should use parallel requests)
+            start_time = time.time()
+            content = await client.call_tool("get_recent_changes", {"commits": 10})
+            elapsed_time = time.time() - start_time
+
+            # Should complete reasonably quickly (under 10 seconds even with network latency)
+            assert elapsed_time < 10, f"Should complete within 10 seconds, took {elapsed_time:.2f}s"
+            assert "Recent changes" in content, "Should return valid response"
 
 
 @pytest.fixture(scope="session")

@@ -77,7 +77,21 @@ class TestBlogMCPServer:
                 "query": "leadership",
                 "limit": 3
             })
-            assertions.assert_search_results(content, "leadership")
+            # blog_search now returns JSON
+            import json
+            data = json.loads(content)
+
+            # Check structure
+            assert "query" in data
+            assert data["query"] == "leadership"
+            assert "count" in data
+            assert "posts" in data
+
+            # If posts found, verify structure
+            if data["count"] > 0:
+                assert len(data["posts"]) > 0
+                assert "title" in data["posts"][0]
+                assert "url" in data["posts"][0]
 
     async def test_blog_search_empty_query(self, mcp_server, assertions):
         """Test blog_search with empty query."""
@@ -94,11 +108,13 @@ class TestBlogMCPServer:
                 "limit": 2
             })
 
-            # If results found, count them
-            if "Found" in content and "blog posts matching" in content:
-                # Count title occurrences (each result has one)
-                title_count = content.count("Title:")
-                assert title_count <= 2, f"Limit not respected: found {title_count} results"
+            import json
+            data = json.loads(content)
+
+            # If results found, check limit is respected
+            if "posts" in data and data.get("count", 0) > 0:
+                assert len(data["posts"]) <= 2, f"Limit not respected: found {len(data['posts'])} results"
+                assert data["limit"] == 2
 
     async def test_recent_blog_posts(self, mcp_server):
         """Test recent_blog_posts returns JSON with recent posts."""

@@ -21,62 +21,59 @@ A FastMCP server that provides tools for interacting with Igor's blog at [idvork
 
 #### Recent Blog Posts Flow
 
-```plantuml
-@startuml
-participant "MCP Client" as Client
-participant "Blog MCP Server" as Server
-participant "GitHub API" as GitHub
-participant "back-links.json" as BackLinks
+```mermaid
+sequenceDiagram
+    participant Client as MCP Client
+    participant Server as Blog MCP Server
+    participant GitHub as GitHub API
+    participant BackLinks as back-links.json
 
-Client -> Server: recent_blog_posts(limit=5)
-Server -> BackLinks: GET /idvorkin.github.io/master/back-links.json
-BackLinks --> Server: JSON with all blog metadata
-Server -> Server: Sort posts by last_modified
-Server -> Server: Select top N posts
-Server --> Client: JSON with recent posts\n(title, url, description, date)
-@enduml
+    Client->>Server: recent_blog_posts(limit=5)
+    Server->>BackLinks: GET /idvorkin.github.io/master/back-links.json
+    BackLinks-->>Server: JSON with all blog metadata
+    Server->>Server: Sort posts by last_modified
+    Server->>Server: Select top N posts
+    Server-->>Client: JSON with recent posts<br/>(title, url, description, date)
 ```
 
 #### Random Blog Post Flow
 
-```plantuml
-@startuml
-participant "MCP Client" as Client
-participant "Blog MCP Server" as Server
-participant "GitHub API" as GitHub
-participant "back-links.json" as BackLinks
+```mermaid
+sequenceDiagram
+    participant Client as MCP Client
+    participant Server as Blog MCP Server
+    participant GitHub as GitHub API
+    participant BackLinks as back-links.json
 
-Client -> Server: random_blog(include_content=true)
-Server -> BackLinks: GET /idvorkin.github.io/master/back-links.json
-BackLinks --> Server: JSON with all blog metadata
-Server -> Server: Select random post
-alt include_content == true
-    Server -> GitHub: GET markdown file from markdown_path
-    GitHub --> Server: Markdown content
-    Server -> Server: Extract and format content
-end
-Server --> Client: Blog post with metadata\n(and content if requested)
-@enduml
+    Client->>Server: random_blog(include_content=true)
+    Server->>BackLinks: GET /idvorkin.github.io/master/back-links.json
+    BackLinks-->>Server: JSON with all blog metadata
+    Server->>Server: Select random post
+    alt include_content == true
+        Server->>GitHub: GET markdown file from markdown_path
+        GitHub-->>Server: Markdown content
+        Server->>Server: Extract and format content
+    end
+    Server-->>Client: Blog post with metadata<br/>(and content if requested)
 ```
 
 #### Read Blog Post Flow
 
-```plantuml
-@startuml
-participant "MCP Client" as Client
-participant "Blog MCP Server" as Server
-participant "GitHub API" as GitHub
-participant "back-links.json" as BackLinks
+```mermaid
+sequenceDiagram
+    participant Client as MCP Client
+    participant Server as Blog MCP Server
+    participant GitHub as GitHub API
+    participant BackLinks as back-links.json
 
-Client -> Server: read_blog_post(url="https://idvork.in/42")
-Server -> BackLinks: GET /idvorkin.github.io/master/back-links.json
-BackLinks --> Server: JSON with all blog metadata
-Server -> Server: Find post by URL
-Server -> GitHub: GET markdown file from markdown_path
-GitHub --> Server: Markdown content
-Server -> Server: Extract title and content
-Server --> Client: Blog post with full content
-@enduml
+    Client->>Server: read_blog_post(url="https://idvork.in/42")
+    Server->>BackLinks: GET /idvorkin.github.io/master/back-links.json
+    BackLinks-->>Server: JSON with all blog metadata
+    Server->>Server: Find post by URL
+    Server->>GitHub: GET markdown file from markdown_path
+    GitHub-->>Server: Markdown content
+    Server->>Server: Extract title and content
+    Server-->>Client: Blog post with full content
 ```
 
 ## Features

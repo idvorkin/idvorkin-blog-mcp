@@ -13,9 +13,10 @@ A FastMCP server that provides tools for interacting with Igor's blog at [idvork
 ## Architecture
 
 - **FastMCP 2.0**: High-level Python framework that handles all MCP protocol details
-- **GitHub Source**: Reads markdown files directly from the `idvorkin/idvorkin.github.io` repository
+- **GitHub Source**: Reads markdown files directly from any configured GitHub repository
 - **Simple Tools**: Each tool is just a decorated Python function - no manual protocol implementation
 - **Type Safety**: Automatic schema generation from Python type hints
+- **Multi-Repo Support**: Configure via environment variables to support any repository
 
 ### Sequence Diagrams
 
@@ -119,6 +120,33 @@ just serve-http [PORT]  # defaults to port 8000
 
 ## Configuration
 
+### Environment Variables
+
+Configure the server to work with any GitHub repository:
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `GITHUB_REPO_OWNER` | `idvorkin` | GitHub repository owner/organization |
+| `GITHUB_REPO_NAME` | `idvorkin.github.io` | GitHub repository name |
+| `GITHUB_REPO_BRANCH` | `master` | GitHub repository branch |
+| `BLOG_URL` | `https://idvork.in` | Base URL for blog posts |
+| `BACKLINKS_PATH` | `back-links.json` | Path to back-links metadata file |
+
+**Example - Using with a different repo:**
+
+```bash
+export GITHUB_REPO_OWNER=idvorkin
+export GITHUB_REPO_NAME=techlead
+export GITHUB_REPO_BRANCH=main
+export BLOG_URL=https://example.com
+export BACKLINKS_PATH=metadata.json
+```
+
+**Note on back-links.json:**
+- Some features (search, recent posts) work best with a `back-links.json` metadata file
+- If this file doesn't exist, the server gracefully degrades to basic functionality
+- See [Back-links Structure](#back-links-structure) below for the expected format
+
 ### MCP Client Configuration
 
 Add this to your MCP client configuration:
@@ -129,11 +157,49 @@ Add this to your MCP client configuration:
     "blog": {
       "command": "uv",
       "args": ["run", "python", "/path/to/blog_mcp_server.py"],
-      "env": {}
+      "env": {
+        "GITHUB_REPO_OWNER": "idvorkin",
+        "GITHUB_REPO_NAME": "idvorkin.github.io",
+        "BLOG_URL": "https://idvork.in"
+      }
     }
   }
 }
 ```
+
+### Back-links Structure
+
+For optimal performance, repositories should provide a `back-links.json` file with this structure:
+
+```json
+{
+  "redirects": {
+    "/short": "/full-path",
+    "/alias": "/actual-path"
+  },
+  "url_info": {
+    "/path": {
+      "title": "Post Title",
+      "description": "Post description or excerpt",
+      "markdown_path": "_d/file.md",
+      "file_path": "_site/file.html",
+      "last_modified": "2025-01-01T00:00:00Z",
+      "doc_size": 5000,
+      "incoming_links": ["/other-post"],
+      "outgoing_links": ["/referenced-post"]
+    }
+  }
+}
+```
+
+**Required fields for full functionality:**
+- `title`: Post title
+- `markdown_path`: Path to source markdown file
+- `last_modified`: ISO timestamp for sorting recent posts
+
+**Optional but recommended:**
+- `description`: Used for search results
+- `incoming_links`, `outgoing_links`: Enable link analysis
 
 ## Tools Documentation
 
@@ -252,6 +318,26 @@ just call-prod TOOL_NAME '{"arg1": "value1"}'
 ```
 
 ## Deployment
+
+### FastMCP Cloud (Primary)
+
+The server automatically deploys to FastMCP Cloud when pushed to the main branch.
+
+**Deploying Multiple Instances for Different Repos:**
+
+1. Create separate FastMCP Cloud projects for each repository
+2. Configure environment variables in each project:
+   ```bash
+   GITHUB_REPO_OWNER=idvorkin
+   GITHUB_REPO_NAME=techlead
+   BLOG_URL=https://techlead.example.com
+   ```
+3. Deploy each configuration to its own endpoint
+
+**Example: Multiple repo deployments**
+- Blog: `https://idvorkin-blog-mcp.fastmcp.app/mcp`
+- Notes: `https://idvorkin-notes-mcp.fastmcp.app/mcp`
+- Docs: `https://idvorkin-docs-mcp.fastmcp.app/mcp`
 
 ### Google Cloud Run (Alternative)
 

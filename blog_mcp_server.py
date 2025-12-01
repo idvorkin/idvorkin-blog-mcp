@@ -17,6 +17,7 @@ This server offers eight tools:
 import asyncio
 import json
 import logging
+import os
 import random
 import re
 import time
@@ -30,11 +31,19 @@ from fastmcp import FastMCP
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Server configuration
-mcp = FastMCP("blog-mcp-server")
-GITHUB_REPO_URL = "https://api.github.com/repos/idvorkin/idvorkin.github.io"
-BLOG_URL = "https://idvork.in"
-BACKLINKS_URL = "https://raw.githubusercontent.com/idvorkin/idvorkin.github.io/master/back-links.json"
+# Server configuration from environment variables (with backwards-compatible defaults)
+GITHUB_REPO_OWNER = os.getenv("GITHUB_REPO_OWNER", "idvorkin")
+GITHUB_REPO_NAME = os.getenv("GITHUB_REPO_NAME", "idvorkin.github.io")
+GITHUB_REPO_BRANCH = os.getenv("GITHUB_REPO_BRANCH", "master")
+BLOG_URL = os.getenv("BLOG_URL", "https://idvork.in")
+BACKLINKS_PATH = os.getenv("BACKLINKS_PATH", "back-links.json")
+
+# Derived configuration
+GITHUB_REPO_URL = f"https://api.github.com/repos/{GITHUB_REPO_OWNER}/{GITHUB_REPO_NAME}"
+BACKLINKS_URL = f"https://raw.githubusercontent.com/{GITHUB_REPO_OWNER}/{GITHUB_REPO_NAME}/{GITHUB_REPO_BRANCH}/{BACKLINKS_PATH}"
+
+# Initialize FastMCP with repository-aware name
+mcp = FastMCP(f"{GITHUB_REPO_NAME}-mcp-server")
 
 # Cache for back-links data (expires after 5 minutes)
 _blog_cache: Optional[dict] = None
@@ -73,7 +82,11 @@ async def fetch_url(url: str) -> str:
 
 
 async def get_blog_data() -> dict:
-    """Get cached blog data from back-links.json file."""
+    """Get cached blog data from back-links.json file.
+
+    Returns a dict with 'url_info' and 'redirects' keys.
+    If back-links.json doesn't exist, returns empty structure for graceful degradation.
+    """
     global _blog_cache, _cache_timestamp
 
     current_time = time.time()
@@ -83,21 +96,25 @@ async def get_blog_data() -> dict:
         return _blog_cache
 
     try:
-        logger.info("Fetching fresh blog data from back-links.json")
+        logger.info(f"Fetching fresh blog data from {BACKLINKS_URL}")
         content = await fetch_url(BACKLINKS_URL)
         _blog_cache = json.loads(content)
         _cache_timestamp = current_time
 
-        logger.info(f"Cached {len(_blog_cache.get('url_info', {}))} blog entries")
+        logger.info(f"Cached {len(_blog_cache.get('url_info', {}))} entries from {GITHUB_REPO_OWNER}/{GITHUB_REPO_NAME}")
         return _blog_cache
 
     except Exception as e:
-        logger.error(f"Failed to fetch back-links.json: {e}")
+        logger.error(f"Failed to fetch back-links.json from {BACKLINKS_URL}: {e}")
         # Fall back to cached data if available, even if expired
         if _blog_cache:
             logger.warning("Using expired cache due to fetch failure")
             return _blog_cache
-        raise BlogError(f"Failed to get blog data: {e}") from e
+
+        # If no cache and back-links.json doesn't exist, return empty structure
+        # This allows graceful degradation for repos without back-links.json
+        logger.warning(f"No back-links.json found for {GITHUB_REPO_OWNER}/{GITHUB_REPO_NAME}. Some features will be limited.")
+        return {"url_info": {}, "redirects": {}}
 
 
 async def get_blog_files() -> list[dict]:
@@ -222,13 +239,16 @@ async def parse_markdown_content(file_info: dict) -> dict:
 
 @mcp.tool
 def blog_info() -> str:
-    """Get information about Igor's blog at idvork.in"""
-    return f"""Blog Information:
+    """Get information about the configured repository"""
+    return f"""Repository Information:
 - URL: {BLOG_URL}
-- Name: Igor's Blog  
-- Description: Personal blog by Igor Dvorkin covering technology, leadership, and life insights
-- Source: Markdown files from GitHub repository (idvorkin/idvorkin.github.io)
-- MCP server for interacting with the blog content directly from GitHub.
+- Repository: {GITHUB_REPO_OWNER}/{GITHUB_REPO_NAME}
+- Branch: {GITHUB_REPO_BRANCH}
+- MCP server for interacting with markdown content directly from GitHub.
+
+Configuration:
+- Back-links file: {BACKLINKS_PATH}
+- GitHub API: {GITHUB_REPO_URL}
 
 Available tools:
 - blog_info: Get this information
@@ -238,12 +258,13 @@ Available tools:
 - blog_search: Search posts by query (returns JSON)
 - recent_blog_posts: Get the most recent blog posts (returns JSON)
 - all_blog_posts: Get all blog posts (returns JSON)
+- get_recent_changes: Get recent commits and changes
 """
 
 
 @mcp.tool
 async def random_blog(include_content: bool = True) -> str:
-    """Get a random blog post from idvork.in"""
+    """Get a random blog post from the configured repository"""
     try:
         blog_files = await get_blog_files()
         if not blog_files:
@@ -263,7 +284,7 @@ async def random_blog(include_content: bool = True) -> str:
 
 @mcp.tool
 async def all_blog_posts() -> str:
-    """Get all blog posts from idvork.in as JSON data"""
+    """Get all blog posts from the configured repository as JSON data"""
     try:
         # Use cached back-links data for efficiency
         blog_data = await get_blog_data()
@@ -410,7 +431,7 @@ async def read_blog_post(url: str) -> str:
 
 @mcp.tool
 async def random_blog_url() -> str:
-    """Get a random blog post URL from idvork.in"""
+    """Get a random blog post URL from the configured repository"""
     try:
         blog_files = await get_blog_files()
         if not blog_files:
@@ -501,7 +522,7 @@ async def blog_search(query: str, limit: int = 5) -> str:
 
 @mcp.tool
 async def recent_blog_posts(limit: int = 20) -> str:
-    """Get the most recent blog posts from idvork.in as JSON data"""
+    """Get the most recent blog posts from the configured repository as JSON data"""
     # Validate and sanitize limit
     try:
         limit = int(limit)

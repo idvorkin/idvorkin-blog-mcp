@@ -98,6 +98,8 @@ _available_repos: Optional[list[str]] = None
 _repo_default_branches: dict[str, str] = {}
 _repo_caches: dict[str, dict] = {}
 _repo_cache_timestamps: dict[str, float] = {}
+_list_repos_cache: Optional[list[dict]] = None
+_list_repos_cache_time: Optional[float] = None
 CACHE_DURATION = 300  # 5 minutes
 
 # Server configuration
@@ -487,8 +489,25 @@ async def list_repos() -> str:
     - description: Repository description (truncated to 200 characters)
     - last_commit_date: Date of the most recent commit
     - last_commit_hash: Hash of the most recent commit
+    - error: (optional) Error message if metadata fetch failed for this repository
+
+    Results are cached for 5 minutes to reduce GitHub API usage and avoid rate limiting.
     """
+    global _list_repos_cache, _list_repos_cache_time
+
     try:
+        # Check cache first (5-minute TTL to reduce API usage)
+        current_time = time.time()
+        if _list_repos_cache is not None and _list_repos_cache_time is not None:
+            if (current_time - _list_repos_cache_time) < CACHE_DURATION:
+                logger.info("Returning cached list_repos data")
+                return json.dumps({
+                    "owner": GITHUB_REPO_OWNER,
+                    "default_repo": DEFAULT_REPO,
+                    "repositories": _list_repos_cache,
+                    "count": len(_list_repos_cache)
+                }, indent=2)
+
         repos = await get_available_repos()
 
         # Fetch detailed information for each repository
@@ -501,22 +520,31 @@ async def list_repos() -> str:
             async def fetch_repo_details(repo_name: str) -> dict:
                 async with semaphore:
                     try:
-                        # Fetch repository info (includes description)
+                        # Fetch repository info and latest commit in parallel for better performance
                         repo_url = f"https://api.github.com/repos/{GITHUB_REPO_OWNER}/{repo_name}"
-                        repo_response = await client.get(repo_url)
-                        repo_response.raise_for_status()
-                        repo_data = repo_response.json()
-
-                        # Fetch latest commit
                         commits_url = f"https://api.github.com/repos/{GITHUB_REPO_OWNER}/{repo_name}/commits"
-                        commits_response = await client.get(commits_url, params={"per_page": 1})
+
+                        repo_response, commits_response = await asyncio.gather(
+                            client.get(repo_url),
+                            client.get(commits_url, params={"per_page": 1}),
+                            return_exceptions=True
+                        )
+
+                        # Handle potential exceptions from gather
+                        if isinstance(repo_response, Exception):
+                            raise repo_response
+                        if isinstance(commits_response, Exception):
+                            raise commits_response
+
+                        repo_response.raise_for_status()
                         commits_response.raise_for_status()
+                        repo_data = repo_response.json()
                         commits_data = commits_response.json()
 
                         # Extract latest commit info
                         latest_commit = commits_data[0] if commits_data else None
 
-                        # Truncate description to 200 characters
+                        # Handle None (null) or missing descriptions
                         description = repo_data.get("description", "") or ""
                         if len(description) > 200:
                             description = description[:197] + "..."
@@ -527,20 +555,25 @@ async def list_repos() -> str:
                             "last_commit_date": latest_commit["commit"]["author"]["date"] if latest_commit else None,
                             "last_commit_hash": latest_commit["sha"] if latest_commit else None
                         }
-                    except Exception as e:
-                        logger.error(f"Error fetching details for {repo_name}: {e}")
+                    except Exception:
+                        logger.exception(f"Error fetching details for {repo_name}")
                         # Return basic info if fetch fails
                         return {
                             "name": repo_name,
                             "description": "",
                             "last_commit_date": None,
                             "last_commit_hash": None,
-                            "error": str(e)
+                            "error": f"Failed to fetch metadata (check GitHub API rate limits or repository access)"
                         }
 
             # Fetch all repo details in parallel
             tasks = [fetch_repo_details(repo) for repo in repos]
             repo_details = await asyncio.gather(*tasks)
+
+            # Cache the results
+            _list_repos_cache = repo_details
+            _list_repos_cache_time = current_time
+            logger.info(f"Cached list_repos data for {len(repo_details)} repositories")
 
         return json.dumps({
             "owner": GITHUB_REPO_OWNER,

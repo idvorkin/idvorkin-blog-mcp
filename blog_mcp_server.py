@@ -62,6 +62,12 @@ logger = logging.getLogger(__name__)
 # BACKLINKS_PATH: Path to back-links.json in repo (default: "back-links.json")
 #   Relative path from repository root
 #   Example: BACKLINKS_PATH="data/back-links.json"
+#
+# GITHUB_TOKEN: Optional GitHub personal access token for authentication (default: None)
+#   Increases API rate limit from 60/hour (unauthenticated) to 5,000/hour (authenticated)
+#   Required for: large repo lists, frequent list_repos calls, private repositories
+#   Example: GITHUB_TOKEN="ghp_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+#   See: https://github.com/settings/tokens
 # ============================================================================
 
 GITHUB_REPO_OWNER = os.getenv("GITHUB_REPO_OWNER", "idvorkin")
@@ -69,6 +75,21 @@ GITHUB_REPOS = os.getenv("GITHUB_REPOS", "*")
 DEFAULT_REPO = os.getenv("DEFAULT_REPO", "idvorkin.github.io")
 BLOG_URL = os.getenv("BLOG_URL", "https://idvork.in")
 BACKLINKS_PATH = os.getenv("BACKLINKS_PATH", "back-links.json")
+GITHUB_TOKEN = os.getenv("GITHUB_TOKEN", None)
+
+
+def get_github_headers() -> dict:
+    """Get GitHub API headers with optional authentication.
+
+    Returns headers dict with Authorization if GITHUB_TOKEN is set.
+    This increases rate limit from 60/hour to 5,000/hour.
+    """
+    headers = {"Accept": "application/vnd.github.v3+json"}
+    if GITHUB_TOKEN:
+        headers["Authorization"] = f"token {GITHUB_TOKEN}"
+        logger.debug("Using GitHub authentication token")
+    return headers
+
 
 # ============================================================================
 # Multi-Repo Caching Architecture
@@ -98,6 +119,8 @@ _available_repos: Optional[list[str]] = None
 _repo_default_branches: dict[str, str] = {}
 _repo_caches: dict[str, dict] = {}
 _repo_cache_timestamps: dict[str, float] = {}
+_list_repos_cache: Optional[list[dict]] = None
+_list_repos_cache_time: Optional[float] = None
 CACHE_DURATION = 300  # 5 minutes
 
 # Server configuration
@@ -120,7 +143,7 @@ async def get_available_repos() -> list[str]:
     if GITHUB_REPOS == "*":
         # Fetch all repos for the user (with pagination support)
         try:
-            async with httpx.AsyncClient(timeout=30.0) as client:
+            async with httpx.AsyncClient(timeout=30.0, headers=get_github_headers()) as client:
                 url = f"https://api.github.com/users/{GITHUB_REPO_OWNER}/repos"
                 # Set per_page=100 to reduce API calls (GitHub default is 30, max is 100)
                 response = await client.get(url, params={"per_page": 100})
@@ -201,7 +224,7 @@ async def get_default_branch(repo: str) -> str:
         return _repo_default_branches[repo]
 
     try:
-        async with httpx.AsyncClient(timeout=30.0) as client:
+        async with httpx.AsyncClient(timeout=30.0, headers=get_github_headers()) as client:
             url = f"https://api.github.com/repos/{GITHUB_REPO_OWNER}/{repo}"
             response = await client.get(url)
             response.raise_for_status()
@@ -475,20 +498,149 @@ async def parse_markdown_content(file_info: dict) -> dict:
 
 
 @mcp.tool
-async def list_repos() -> str:
-    """List all available repositories.
+async def list_repos(page: int = 1, per_page: int = 20) -> str:
+    """List all available repositories with metadata (paginated).
 
     Use this to discover which repositories are accessible before calling
     other tools with the repo parameter. If GITHUB_REPOS="*", this will
     show all public repos for GITHUB_REPO_OWNER.
+
+    Parameters:
+    - page: Page number to return (default: 1)
+    - per_page: Number of repositories per page (default: 20, max: 100)
+
+    Returns repository information including:
+    - name: Repository name
+    - description: Repository description (truncated to 200 characters)
+    - last_commit_date: Date of the most recent commit
+    - last_commit_hash: Hash of the most recent commit
+    - error: (optional) Error message if metadata fetch failed for this repository
+
+    Results are cached for 5 minutes to reduce GitHub API usage and avoid rate limiting.
+    Repositories are sorted by most recent change (last_commit_date descending).
     """
+    global _list_repos_cache, _list_repos_cache_time
+
+    # Validate and sanitize pagination parameters
     try:
-        repos = await get_available_repos()
+        page = int(page)
+        per_page = int(per_page)
+        if page < 1:
+            page = 1
+        if per_page < 1 or per_page > 100:
+            per_page = min(max(per_page, 1), 100)  # Clamp between 1 and 100
+    except (ValueError, TypeError):
+        page = 1
+        per_page = 20
+
+    try:
+        # Check cache first (5-minute TTL to reduce API usage)
+        current_time = time.time()
+        all_repos = None
+
+        if _list_repos_cache is not None and _list_repos_cache_time is not None:
+            if (current_time - _list_repos_cache_time) < CACHE_DURATION:
+                logger.info("Using cached list_repos data")
+                all_repos = _list_repos_cache
+
+        if all_repos is None:
+            repos = await get_available_repos()
+
+            # Fetch detailed information for each repository
+            async with httpx.AsyncClient(timeout=30.0, headers=get_github_headers()) as client:
+                repo_details = []
+
+                # Use semaphore to limit concurrent requests (15 parallel requests max)
+                semaphore = asyncio.Semaphore(15)
+
+                async def fetch_repo_details(repo_name: str) -> dict:
+                    async with semaphore:
+                        try:
+                            # Fetch repository info and latest commit in parallel for better performance
+                            repo_url = f"https://api.github.com/repos/{GITHUB_REPO_OWNER}/{repo_name}"
+                            commits_url = f"https://api.github.com/repos/{GITHUB_REPO_OWNER}/{repo_name}/commits"
+
+                            repo_response, commits_response = await asyncio.gather(
+                                client.get(repo_url),
+                                client.get(commits_url, params={"per_page": 1}),
+                                return_exceptions=True
+                            )
+
+                            # Handle potential exceptions from gather
+                            if isinstance(repo_response, Exception):
+                                raise repo_response
+                            if isinstance(commits_response, Exception):
+                                raise commits_response
+
+                            repo_response.raise_for_status()
+                            commits_response.raise_for_status()
+                            repo_data = repo_response.json()
+                            commits_data = commits_response.json()
+
+                            # Extract latest commit info
+                            latest_commit = commits_data[0] if commits_data else None
+
+                            # Handle None (null) or missing descriptions
+                            description = repo_data.get("description", "") or ""
+                            if len(description) > 200:
+                                description = description[:197] + "..."
+
+                            return {
+                                "name": repo_name,
+                                "description": description,
+                                "last_commit_date": latest_commit["commit"]["author"]["date"] if latest_commit else None,
+                                "last_commit_hash": latest_commit["sha"] if latest_commit else None
+                            }
+                        except Exception:
+                            logger.exception(f"Error fetching details for {repo_name}")
+                            # Return basic info if fetch fails
+                            return {
+                                "name": repo_name,
+                                "description": "",
+                                "last_commit_date": None,
+                                "last_commit_hash": None,
+                                "error": f"Failed to fetch metadata (check GitHub API rate limits or repository access)"
+                            }
+
+                # Fetch all repo details in parallel
+                tasks = [fetch_repo_details(repo) for repo in repos]
+                repo_details = await asyncio.gather(*tasks)
+
+                # Cache the results
+                all_repos = repo_details
+                _list_repos_cache = repo_details
+                _list_repos_cache_time = current_time
+                logger.info(f"Cached list_repos data for {len(repo_details)} repositories")
+
+        # Sort by most recent change (last_commit_date descending)
+        # Repos without dates go to the end
+        def sort_key(repo):
+            date = repo.get("last_commit_date")
+            if date:
+                return date
+            return "0000-00-00T00:00:00Z"  # Put repos without dates at the end
+
+        sorted_repos = sorted(all_repos, key=sort_key, reverse=True)
+
+        # Calculate pagination
+        total_count = len(sorted_repos)
+        start_idx = (page - 1) * per_page
+        end_idx = start_idx + per_page
+        paginated_repos = sorted_repos[start_idx:end_idx]
+        total_pages = (total_count + per_page - 1) // per_page  # Ceiling division
+
         return json.dumps({
             "owner": GITHUB_REPO_OWNER,
             "default_repo": DEFAULT_REPO,
-            "repositories": repos,
-            "count": len(repos)
+            "repositories": paginated_repos,
+            "pagination": {
+                "page": page,
+                "per_page": per_page,
+                "total_count": total_count,
+                "total_pages": total_pages,
+                "has_next": page < total_pages,
+                "has_prev": page > 1
+            }
         }, indent=2)
     except BlogError as e:
         # Specific errors from get_available_repos
@@ -930,7 +1082,7 @@ async def get_recent_changes(
 
         # Fetch commits list
         commits_url = f"https://api.github.com/repos/{GITHUB_REPO_OWNER}/{repo}/commits"
-        async with httpx.AsyncClient(timeout=30.0) as client:
+        async with httpx.AsyncClient(timeout=30.0, headers=get_github_headers()) as client:
             logger.info(f"Fetching commits from GitHub: {commits_url}")
             response = await client.get(commits_url, params=params)
             response.raise_for_status()
@@ -950,7 +1102,7 @@ async def get_recent_changes(
 
         async def fetch_commit_details(commit_sha: str) -> dict:
             async with semaphore:
-                async with httpx.AsyncClient(timeout=30.0) as client:
+                async with httpx.AsyncClient(timeout=30.0, headers=get_github_headers()) as client:
                     commit_url = f"https://api.github.com/repos/{GITHUB_REPO_OWNER}/{repo}/commits/{commit_sha}"
                     try:
                         response = await client.get(commit_url)

@@ -4,7 +4,7 @@ A FastMCP server that provides tools for interacting with Igor's blog at [idvork
 
 ## 🚀 Live Server
 
-**Production URL**: https://idvorkin-blog-mcp.fastmcp.app/mcp
+**Production URL**: https://idvorkin-blog-and-repo.fastmcp.app/mcp
 
 - Automatically deploys on push to main branch
 - Requires API key for authentication
@@ -78,15 +78,17 @@ sequenceDiagram
 
 ## Features
 
-This MCP server provides 7 tools for blog interaction:
+This MCP server provides 9 tools for blog and repository interaction:
 
-1. **blog_info** - Get information about the blog
-2. **random_blog** - Get a random blog post (with optional content)
-3. **read_blog_post** - Read a specific blog post by URL, redirect path, or markdown path
-4. **random_blog_url** - Get a random blog post URL
-5. **blog_search** - Search blog posts by query (returns JSON)
-6. **recent_blog_posts** - Get the most recent blog posts (returns JSON)
-7. **all_blog_posts** - Get all blog posts (returns JSON)
+1. **list_repos** - List all available repositories with metadata (paginated, sorted by recent changes)
+2. **blog_info** - Get information about the blog
+3. **random_blog** - Get a random blog post (with optional content)
+4. **read_blog_post** - Read a specific blog post by URL, redirect path, or markdown path
+5. **random_blog_url** - Get a random blog post URL
+6. **blog_search** - Search blog posts by query (returns JSON)
+7. **recent_blog_posts** - Get the most recent blog posts (returns JSON)
+8. **all_blog_posts** - Get all blog posts (returns JSON)
+9. **get_recent_changes** - Get recent commits and changes from the repository
 
 ## Installation
 
@@ -129,13 +131,104 @@ Add this to your MCP client configuration:
     "blog": {
       "command": "uv",
       "args": ["run", "python", "/path/to/blog_mcp_server.py"],
-      "env": {}
+      "env": {
+        "GITHUB_TOKEN": "your_token_here"
+      }
     }
   }
 }
 ```
 
+### GitHub Authentication (Recommended)
+
+For better performance and to avoid rate limiting, it's highly recommended to use a GitHub Personal Access Token:
+
+#### Why Use a Token?
+
+- **Unauthenticated**: 60 requests/hour
+- **Authenticated**: 5,000 requests/hour
+- **Required for**: Large repository lists, frequent `list_repos` calls, private repositories
+
+#### How to Get a GitHub Token
+
+1. Visit [GitHub Settings > Personal Access Tokens](https://github.com/settings/tokens)
+2. Click "Generate new token" → "Generate new token (classic)"
+3. Give it a descriptive name (e.g., "Blog MCP Server")
+4. Select scopes:
+   - `public_repo` - For accessing public repositories
+   - `repo` - Only if you need access to private repositories
+5. Click "Generate token" and copy it immediately (you won't see it again!)
+
+#### Setting the Token
+
+**Option 1: Environment Variable (Local Development)**
+
+```bash
+export GITHUB_TOKEN="ghp_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+just serve
+```
+
+**Option 2: .env File (Local Development)**
+
+Create a `.env` file in the project root:
+
+```env
+GITHUB_TOKEN=ghp_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+```
+
+**Option 3: MCP Client Configuration**
+
+See the MCP Client Configuration example above.
+
+**Option 4: FastMCP Cloud Deployment**
+
+In your FastMCP Cloud project settings, add an environment variable:
+- **Name**: `GITHUB_TOKEN`
+- **Value**: Your token
+
+**Security Note**: Never commit your token to git! The `.env` file is already in `.gitignore`.
+
 ## Tools Documentation
+
+### list_repos
+
+List all available repositories with metadata, paginated and sorted by recent changes.
+
+**Parameters:**
+
+- `page` (integer, optional): Page number to return (default: 1)
+- `per_page` (integer, optional): Number of repositories per page (default: 20, max: 100)
+
+**Returns:** JSON with paginated repository metadata:
+- Repository name
+- Description (truncated to 200 characters)
+- Last commit date
+- Last commit hash
+- Pagination info (current page, total pages, has next/prev)
+
+**Example:**
+```json
+{
+  "owner": "idvorkin",
+  "default_repo": "idvorkin.github.io",
+  "repositories": [
+    {
+      "name": "idvorkin.github.io",
+      "description": "My static blog",
+      "last_commit_date": "2025-12-01T05:26:39Z",
+      "last_commit_hash": "d8912256906e898f6d43e6e6a33044ea055f7b3b"
+    }
+  ],
+  "pagination": {
+    "page": 1,
+    "per_page": 20,
+    "total_count": 82,
+    "total_pages": 5,
+    "has_next": true,
+    "has_prev": false
+  }
+}
+```
 
 ### blog_info
 
@@ -255,7 +348,7 @@ just call-prod TOOL_NAME '{"arg1": "value1"}'
 
 ### FastMCP Cloud (Recommended)
 
-**Production URL**: https://idvorkin-blog-mcp.fastmcp.app/mcp
+**Production URL**: https://idvorkin-blog-and-repo.fastmcp.app/mcp
 
 FastMCP Cloud provides zero-configuration deployment with automatic GitHub integration:
 

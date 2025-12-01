@@ -314,7 +314,7 @@ class TestDefaultBranchDetection:
 
     @patch('blog_mcp_server.httpx.AsyncClient')
     async def test_fallback_on_error(self, mock_client_class):
-        """Test fallback to 'main' when API fails."""
+        """Test that API errors raise BlogError instead of silent fallback."""
         # Setup mock to raise error
         mock_client = AsyncMock()
         mock_client_class.return_value.__aenter__.return_value = mock_client
@@ -327,9 +327,9 @@ class TestDefaultBranchDetection:
         # Clear cache
         blog_mcp_server._repo_default_branches.clear()
 
-        # Should fall back to "main"
-        branch = await blog_mcp_server.get_default_branch("error-repo")
-        assert branch == "main"
+        # Should raise BlogError instead of falling back
+        with pytest.raises(blog_mcp_server.BlogError, match="Failed to get default branch"):
+            await blog_mcp_server.get_default_branch("error-repo")
 
     @patch('blog_mcp_server.get_default_branch')
     async def test_urls_use_dynamic_branch(self, mock_get_branch):

@@ -135,23 +135,23 @@ async def get_available_repos() -> list[str]:
                 raise BlogError(
                     f"GitHub user '{GITHUB_REPO_OWNER}' not found. "
                     f"Check GITHUB_REPO_OWNER environment variable."
-                )
+                ) from e
             elif e.response.status_code == 403:
                 raise BlogError(
                     f"GitHub API rate limit exceeded or access forbidden for user '{GITHUB_REPO_OWNER}'. "
                     f"Try again later or use explicit repo list instead of wildcard."
-                )
+                ) from e
             else:
-                raise BlogError(f"Failed to fetch repositories from GitHub API: HTTP {e.response.status_code}")
-        except httpx.TimeoutException:
+                raise BlogError(f"Failed to fetch repositories from GitHub API: HTTP {e.response.status_code}") from e
+        except httpx.TimeoutException as e:
             logger.error(f"Timeout fetching repositories for {GITHUB_REPO_OWNER}")
             raise BlogError(
                 f"Timeout connecting to GitHub API to fetch repositories. "
                 f"Check network connectivity or use explicit repo list."
-            )
+            ) from e
         except Exception as e:
             logger.error(f"Unexpected error fetching repositories for {GITHUB_REPO_OWNER}: {e}")
-            raise BlogError(f"Failed to fetch repository list: {str(e)}")
+            raise BlogError(f"Failed to fetch repository list: {str(e)}") from e
     else:
         # Parse comma-separated list
         _available_repos = [repo.strip() for repo in GITHUB_REPOS.split(",")]
@@ -216,23 +216,23 @@ async def get_default_branch(repo: str) -> str:
             raise BlogError(
                 f"Repository '{GITHUB_REPO_OWNER}/{repo}' not found. "
                 f"Check repository name or use list_repos tool to see available repositories."
-            )
+            ) from e
         elif e.response.status_code == 403:
             raise BlogError(
                 f"Access forbidden to repository '{GITHUB_REPO_OWNER}/{repo}'. "
                 f"Check permissions or API rate limit."
-            )
+            ) from e
         else:
-            raise BlogError(f"Failed to get repository info: HTTP {e.response.status_code}")
-    except httpx.TimeoutException:
+            raise BlogError(f"Failed to get repository info: HTTP {e.response.status_code}") from e
+    except httpx.TimeoutException as e:
         logger.error(f"Timeout fetching default branch for {repo}")
         raise BlogError(
             f"Timeout fetching repository '{repo}' information. "
             f"Check network connectivity."
-        )
+        ) from e
     except Exception as e:
         logger.error(f"Unexpected error fetching default branch for {repo}: {e}")
-        raise BlogError(f"Failed to get default branch for repository '{repo}': {str(e)}")
+        raise BlogError(f"Failed to get default branch for repository '{repo}': {str(e)}") from e
 
 
 async def fetch_url(url: str) -> str:
@@ -252,6 +252,9 @@ async def fetch_url(url: str) -> str:
                 content = content[:1_000_000]
 
             return content
+        except httpx.HTTPStatusError as e:
+            logger.error(f"HTTP error fetching {url}: {e}")
+            raise BlogError(f"Failed to fetch {url}: HTTP {e.response.status_code}") from e
         except httpx.HTTPError as e:
             logger.error(f"HTTP error fetching {url}: {e}")
             raise BlogError(f"Failed to fetch {url}: {e}") from e
@@ -306,14 +309,14 @@ async def get_blog_data(repo: Optional[str] = None) -> dict:
                 f"Blog data file not found for repository '{repo}'. "
                 f"The repository may not have a '{BACKLINKS_PATH}' file on branch '{await get_default_branch(repo)}', "
                 f"or the default branch detection failed."
-            )
+            ) from e
         elif e.response.status_code == 403:
             raise BlogError(
                 f"Access forbidden to repository '{repo}'. "
                 f"Check permissions or API rate limit."
-            )
+            ) from e
         else:
-            raise BlogError(f"Failed to fetch blog data: HTTP {e.response.status_code}")
+            raise BlogError(f"Failed to fetch blog data: HTTP {e.response.status_code}") from e
     except json.JSONDecodeError as e:
         logger.error(f"Invalid JSON in back-links.json for {repo}: {e}")
         if repo in _repo_caches:
@@ -322,7 +325,7 @@ async def get_blog_data(repo: Optional[str] = None) -> dict:
         raise BlogError(
             f"Invalid blog data format for repository '{repo}'. "
             f"The {BACKLINKS_PATH} file may be corrupted."
-        )
+        ) from e
     except BlogError:
         # Re-raise BlogErrors (from get_default_branch or fetch_url)
         # But try expired cache first
@@ -335,7 +338,7 @@ async def get_blog_data(repo: Optional[str] = None) -> dict:
         if repo in _repo_caches:
             logger.warning(f"Using expired cache for {repo} due to unexpected error: {e}")
             return _repo_caches[repo]
-        raise BlogError(f"Failed to fetch blog data for repository '{repo}': {str(e)}")
+        raise BlogError(f"Failed to fetch blog data for repository '{repo}': {str(e)}") from e
 
 
 async def get_blog_files(repo: Optional[str] = None) -> list[dict]:
@@ -383,7 +386,7 @@ async def get_blog_files(repo: Optional[str] = None) -> list[dict]:
         # Re-raise BlogErrors as-is (from get_blog_data or get_default_branch)
         raise
     except Exception as e:
-        logger.error(f"Unexpected error getting blog files for {repo}: {e}")
+        logger.error(f"Unexpected error getting blog files for {repo}: {type(e).__name__}: {e}")
         raise BlogError(f"Failed to get blog files for repository '{repo}': {str(e)}") from e
 
 
@@ -995,7 +998,8 @@ async def get_recent_changes(
             # Add commit info
             output_lines.append(f"Commit: {commit['sha'][:7]} ({time_ago})")
             output_lines.append(f"Author: {commit['commit']['author']['name']}")
-            output_lines.append(f"Message: {commit['commit']['message'].split('\n')[0]}")  # First line only
+            commit_message = commit['commit']['message'].split('\n')[0]  # First line only
+            output_lines.append(f"Message: {commit_message}")
 
             # Add file changes - filter for blog files if no specific path was given
             if "files" in commit:

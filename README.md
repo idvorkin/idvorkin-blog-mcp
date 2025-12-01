@@ -1,6 +1,8 @@
 # Blog MCP Server
 
-A FastMCP server that provides tools for interacting with Igor's blog at [idvork.in](https://idvork.in). Built with FastMCP 2.0 for automatic tool registration and protocol handling.
+A FastMCP server that provides tools for interacting with Igor's blog at [idvork.in](https://idvork.in) and any GitHub repository. Built with FastMCP 2.0 for automatic tool registration and protocol handling.
+
+**Multi-Repo Support**: Configure via environment variables to work with any idvorkin repository!
 
 ## 🚀 Live Server
 
@@ -78,7 +80,16 @@ sequenceDiagram
 
 ## Features
 
-This MCP server provides 7 tools for blog interaction:
+This MCP server provides two tiers of tools:
+
+### Generic Git Tools (work with any repository)
+
+1. **read_file** - Read any file from the repository
+2. **get_diff** - Get diff for a specific commit
+3. **list_files** - List files and directories
+4. **get_recent_changes** - Get recent commits and changes
+
+### Blog-Specific Tools (require back-links.json structure)
 
 1. **blog_info** - Get information about the blog
 2. **random_blog** - Get a random blog post (with optional content)
@@ -119,6 +130,23 @@ just serve-http [PORT]  # defaults to port 8000
 
 ## Configuration
 
+### Environment Variables
+
+Configure the server to work with different repositories:
+
+```bash
+# Default: Igor's blog
+GITHUB_REPO_OWNER=idvorkin
+GITHUB_REPO_NAME=idvorkin.github.io
+BLOG_URL=https://idvork.in
+BACKLINKS_PATH=back-links.json
+
+# Example: Different repo
+GITHUB_REPO_OWNER=idvorkin
+GITHUB_REPO_NAME=nlp
+# BLOG_URL and BACKLINKS_PATH optional for non-blog repos
+```
+
 ### MCP Client Configuration
 
 Add this to your MCP client configuration:
@@ -129,7 +157,27 @@ Add this to your MCP client configuration:
     "blog": {
       "command": "uv",
       "args": ["run", "python", "/path/to/blog_mcp_server.py"],
-      "env": {}
+      "env": {
+        "GITHUB_REPO_OWNER": "idvorkin",
+        "GITHUB_REPO_NAME": "idvorkin.github.io"
+      }
+    }
+  }
+}
+```
+
+For other repos, just change the environment variables:
+
+```json
+{
+  "mcpServers": {
+    "nlp-repo": {
+      "command": "uv",
+      "args": ["run", "python", "/path/to/blog_mcp_server.py"],
+      "env": {
+        "GITHUB_REPO_OWNER": "idvorkin",
+        "GITHUB_REPO_NAME": "nlp"
+      }
     }
   }
 }
@@ -137,7 +185,84 @@ Add this to your MCP client configuration:
 
 ## Tools Documentation
 
-### blog_info
+### Generic Git Tools
+
+#### read_file
+
+Read any file from the GitHub repository.
+
+**Parameters:**
+
+- `path` (string, required): Path to the file in the repository (e.g., "README.md", "_d/42.md")
+- `ref` (string, optional): Git reference (branch, tag, or commit SHA) to read from (default: "master")
+
+**Returns:** File content with metadata header.
+
+**Example:**
+```
+read_file(path="_d/42.md")
+read_file(path="README.md", ref="develop")
+```
+
+#### get_diff
+
+Get the diff for a specific commit.
+
+**Parameters:**
+
+- `sha` (string, required): Commit SHA (can be short or full SHA)
+- `path` (string, optional): File path to filter diff to specific file
+- `full_diff` (boolean, optional): Include full diff content (default: False, shows summary only)
+
+**Returns:** Formatted diff information with commit details and file changes.
+
+**Example:**
+```
+get_diff(sha="abc123")
+get_diff(sha="abc123", path="_d/42.md", full_diff=True)
+```
+
+#### list_files
+
+List files and directories in the repository.
+
+**Parameters:**
+
+- `path` (string, optional): Directory path to list (empty string for root, default: "")
+- `ref` (string, optional): Git reference to list from (default: "master")
+
+**Returns:** Formatted list of files and directories with sizes.
+
+**Example:**
+```
+list_files()
+list_files(path="_d")
+list_files(path="_posts", ref="develop")
+```
+
+#### get_recent_changes
+
+Get recent changes/commits from the repository.
+
+**Parameters:**
+
+- `path` (string, optional): File/directory path to filter changes
+- `days` (integer, optional): Number of days to look back (mutually exclusive with commits)
+- `commits` (integer, optional): Number of recent commits to include (default: 10)
+- `include_diff` (boolean, optional): Whether to include diff content (default: False)
+
+**Returns:** Formatted list of recent commits with file changes.
+
+**Example:**
+```
+get_recent_changes()
+get_recent_changes(commits=20)
+get_recent_changes(path="_d/", days=7)
+```
+
+### Blog-Specific Tools
+
+#### blog_info
 
 Get information about Igor's blog.
 

@@ -2,8 +2,15 @@
 """
 Blog MCP Server
 
-A FastMCP server that provides tools for interacting with Igor's blog at idvork.in.
-This server offers eight tools:
+A FastMCP server that provides tools for interacting with Igor's blog and any GitHub repo.
+
+Generic Git Tools (work with any repo):
+- read_file: Read any file from the repository
+- get_diff: Get diff for a specific commit or file
+- list_files: List files in a directory
+- get_recent_changes: Get recent changes/commits from the repository
+
+Blog-Specific Tools (require back-links.json):
 - blog_info: Get information about the blog
 - random_blog: Get a random blog post
 - read_blog_post: Read a specific blog post by URL
@@ -11,12 +18,12 @@ This server offers eight tools:
 - blog_search: Search blog posts (returns JSON)
 - recent_blog_posts: Get the most recent blog posts (returns JSON)
 - all_blog_posts: Get all blog posts (returns JSON)
-- get_recent_changes: Get recent changes/commits from the GitHub repository
 """
 
 import asyncio
 import json
 import logging
+import os
 import random
 import re
 import time
@@ -30,11 +37,15 @@ from fastmcp import FastMCP
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Server configuration
+# Server configuration - support environment variables for multi-repo usage
+GITHUB_REPO_OWNER = os.getenv("GITHUB_REPO_OWNER", "idvorkin")
+GITHUB_REPO_NAME = os.getenv("GITHUB_REPO_NAME", "idvorkin.github.io")
+GITHUB_REPO_URL = f"https://api.github.com/repos/{GITHUB_REPO_OWNER}/{GITHUB_REPO_NAME}"
+BLOG_URL = os.getenv("BLOG_URL", "https://idvork.in")
+BACKLINKS_PATH = os.getenv("BACKLINKS_PATH", "back-links.json")
+BACKLINKS_URL = f"https://raw.githubusercontent.com/{GITHUB_REPO_OWNER}/{GITHUB_REPO_NAME}/master/{BACKLINKS_PATH}"
+
 mcp = FastMCP("blog-mcp-server")
-GITHUB_REPO_URL = "https://api.github.com/repos/idvorkin/idvorkin.github.io"
-BLOG_URL = "https://idvork.in"
-BACKLINKS_URL = "https://raw.githubusercontent.com/idvorkin/idvorkin.github.io/master/back-links.json"
 
 # Cache for back-links data (expires after 5 minutes)
 _blog_cache: Optional[dict] = None
@@ -756,6 +767,250 @@ async def get_recent_changes(
     except Exception as e:
         logger.error(f"Error in get_recent_changes: {e}")
         return f"Error getting recent changes: {str(e)}"
+
+
+@mcp.tool
+async def read_file(path: str, ref: str = "master") -> str:
+    """Read a file from the GitHub repository.
+
+    Parameters:
+    - path: Path to the file in the repository (e.g., "README.md", "_d/42.md")
+    - ref: Git reference (branch, tag, or commit SHA) to read from (default: "master")
+
+    Returns the file content as a string.
+    """
+    if not path or not isinstance(path, str) or len(path.strip()) == 0:
+        return "Error: path must be a non-empty string"
+
+    # Remove leading slash if present
+    path = path.strip()
+    if path.startswith("/"):
+        path = path[1:]
+
+    try:
+        # Use GitHub Contents API for file reading
+        file_url = f"{GITHUB_REPO_URL}/contents/{path}?ref={ref}"
+
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            logger.info(f"Reading file from GitHub: {path} (ref: {ref})")
+            response = await client.get(file_url)
+            response.raise_for_status()
+            file_data = response.json()
+
+        # Check if it's a file or directory
+        if file_data.get("type") == "dir":
+            return f"Error: '{path}' is a directory, not a file. Use list_files() to list directory contents."
+
+        # Get the download URL and fetch raw content
+        download_url = file_data.get("download_url")
+        if not download_url:
+            return f"Error: Could not get download URL for '{path}'"
+
+        content = await fetch_url(download_url)
+
+        # Add metadata header
+        size = len(content)
+        output = f"File: {path} (ref: {ref}, size: {size} bytes)\n"
+        output += "=" * 60 + "\n\n"
+        output += content
+
+        return output
+
+    except httpx.HTTPStatusError as e:
+        if e.response.status_code == 404:
+            return f"Error: File not found: '{path}' (ref: {ref})"
+        elif e.response.status_code == 403:
+            return "Error: GitHub API rate limit exceeded. Please try again later."
+        else:
+            return f"Error: GitHub API returned status {e.response.status_code}"
+    except Exception as e:
+        logger.error(f"Error in read_file: {e}")
+        return f"Error reading file: {str(e)}"
+
+
+@mcp.tool
+async def get_diff(
+    sha: str,
+    path: Optional[str] = None,
+    full_diff: bool = False
+) -> str:
+    """Get the diff for a specific commit.
+
+    Parameters:
+    - sha: Commit SHA (can be short or full SHA)
+    - path: Optional file path to filter diff to specific file
+    - full_diff: If True, include full diff content (default: False, shows summary only)
+
+    Returns formatted diff information.
+    """
+    if not sha or not isinstance(sha, str) or len(sha.strip()) == 0:
+        return "Error: sha must be a non-empty string"
+
+    sha = sha.strip()
+
+    try:
+        # Fetch commit details
+        commit_url = f"{GITHUB_REPO_URL}/commits/{sha}"
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            logger.info(f"Fetching commit diff: {sha}")
+            response = await client.get(commit_url)
+            response.raise_for_status()
+            commit_data = response.json()
+
+        # Extract commit info
+        commit_info = commit_data.get("commit", {})
+        author = commit_info.get("author", {})
+        commit_date = author.get("date", "Unknown")
+        commit_message = commit_info.get("message", "No message")
+
+        # Format output
+        output_lines = [
+            f"Commit: {sha}",
+            f"Author: {author.get('name', 'Unknown')} <{author.get('email', 'Unknown')}>",
+            f"Date: {commit_date}",
+            f"Message: {commit_message}",
+            "",
+            "Files changed:",
+            ""
+        ]
+
+        # Process files
+        files = commit_data.get("files", [])
+        if not files:
+            return "\n".join(output_lines) + "No files changed."
+
+        # Filter by path if specified
+        if path:
+            # Remove leading slash
+            if path.startswith("/"):
+                path = path[1:]
+            files = [f for f in files if f["filename"] == path or f["filename"].startswith(path)]
+            if not files:
+                return f"Error: No changes found for path '{path}' in commit {sha}"
+
+        # Display file changes
+        for file in files:
+            filename = file["filename"]
+            status = file.get("status", "modified")
+            additions = file.get("additions", 0)
+            deletions = file.get("deletions", 0)
+
+            if status == "added":
+                change_str = f"+{additions} lines (new file)"
+            elif status == "removed":
+                change_str = f"-{deletions} lines (deleted)"
+            elif status == "renamed":
+                prev_name = file.get("previous_filename", "?")
+                change_str = f"renamed from {prev_name}"
+            else:  # modified
+                change_str = f"+{additions} -{deletions} lines"
+
+            output_lines.append(f"  {filename}: {change_str}")
+
+            # Include full diff if requested
+            if full_diff and "patch" in file:
+                output_lines.append("")
+                output_lines.append("    Diff:")
+                for line in file["patch"].split("\n"):
+                    output_lines.append(f"    {line}")
+                output_lines.append("")
+
+        return "\n".join(output_lines)
+
+    except httpx.HTTPStatusError as e:
+        if e.response.status_code == 404:
+            return f"Error: Commit not found: '{sha}'"
+        elif e.response.status_code == 403:
+            return "Error: GitHub API rate limit exceeded. Please try again later."
+        elif e.response.status_code == 422:
+            return f"Error: Invalid commit SHA: '{sha}'"
+        else:
+            return f"Error: GitHub API returned status {e.response.status_code}"
+    except Exception as e:
+        logger.error(f"Error in get_diff: {e}")
+        return f"Error getting diff: {str(e)}"
+
+
+@mcp.tool
+async def list_files(path: str = "", ref: str = "master") -> str:
+    """List files and directories in the repository.
+
+    Parameters:
+    - path: Directory path to list (empty string for root, default: "")
+    - ref: Git reference (branch, tag, or commit SHA) to list from (default: "master")
+
+    Returns formatted list of files and directories.
+    """
+    # Clean up path
+    if path:
+        path = path.strip()
+        if path.startswith("/"):
+            path = path[1:]
+        if not path.endswith("/") and path != "":
+            path = path + "/"
+
+    try:
+        # Use GitHub Contents API
+        if path and path != "/":
+            contents_url = f"{GITHUB_REPO_URL}/contents/{path.rstrip('/')}?ref={ref}"
+        else:
+            contents_url = f"{GITHUB_REPO_URL}/contents?ref={ref}"
+
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            logger.info(f"Listing files from GitHub: {path or 'root'} (ref: {ref})")
+            response = await client.get(contents_url)
+            response.raise_for_status()
+            contents = response.json()
+
+        # Check if it's a single file
+        if isinstance(contents, dict):
+            if contents.get("type") == "file":
+                return f"Error: '{path}' is a file, not a directory. Use read_file() to read the file."
+            else:
+                return f"Error: Unexpected response for '{path}'"
+
+        # Sort: directories first, then files, both alphabetically
+        dirs = [item for item in contents if item.get("type") == "dir"]
+        files = [item for item in contents if item.get("type") == "file"]
+        dirs.sort(key=lambda x: x.get("name", "").lower())
+        files.sort(key=lambda x: x.get("name", "").lower())
+
+        # Format output
+        output_lines = [
+            f"Directory: {path or '/'} (ref: {ref})",
+            f"Total: {len(dirs)} directories, {len(files)} files",
+            "=" * 60,
+            ""
+        ]
+
+        if dirs:
+            output_lines.append("Directories:")
+            for item in dirs:
+                output_lines.append(f"  📁 {item['name']}/")
+            output_lines.append("")
+
+        if files:
+            output_lines.append("Files:")
+            for item in files:
+                size = item.get("size", 0)
+                size_str = f"{size:,} bytes" if size < 1024 else f"{size/1024:.1f} KB"
+                output_lines.append(f"  📄 {item['name']} ({size_str})")
+
+        if not dirs and not files:
+            output_lines.append("(empty directory)")
+
+        return "\n".join(output_lines)
+
+    except httpx.HTTPStatusError as e:
+        if e.response.status_code == 404:
+            return f"Error: Directory not found: '{path or '/'}' (ref: {ref})"
+        elif e.response.status_code == 403:
+            return "Error: GitHub API rate limit exceeded. Please try again later."
+        else:
+            return f"Error: GitHub API returned status {e.response.status_code}"
+    except Exception as e:
+        logger.error(f"Error in list_files: {e}")
+        return f"Error listing files: {str(e)}"
 
 
 if __name__ == "__main__":

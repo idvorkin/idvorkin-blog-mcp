@@ -476,19 +476,77 @@ async def parse_markdown_content(file_info: dict) -> dict:
 
 @mcp.tool
 async def list_repos() -> str:
-    """List all available repositories.
+    """List all available repositories with metadata.
 
     Use this to discover which repositories are accessible before calling
     other tools with the repo parameter. If GITHUB_REPOS="*", this will
     show all public repos for GITHUB_REPO_OWNER.
+
+    Returns repository information including:
+    - name: Repository name
+    - description: Repository description (truncated to 200 characters)
+    - last_commit_date: Date of the most recent commit
+    - last_commit_hash: Hash of the most recent commit
     """
     try:
         repos = await get_available_repos()
+
+        # Fetch detailed information for each repository
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            repo_details = []
+
+            # Use semaphore to limit concurrent requests (15 parallel requests max)
+            semaphore = asyncio.Semaphore(15)
+
+            async def fetch_repo_details(repo_name: str) -> dict:
+                async with semaphore:
+                    try:
+                        # Fetch repository info (includes description)
+                        repo_url = f"https://api.github.com/repos/{GITHUB_REPO_OWNER}/{repo_name}"
+                        repo_response = await client.get(repo_url)
+                        repo_response.raise_for_status()
+                        repo_data = repo_response.json()
+
+                        # Fetch latest commit
+                        commits_url = f"https://api.github.com/repos/{GITHUB_REPO_OWNER}/{repo_name}/commits"
+                        commits_response = await client.get(commits_url, params={"per_page": 1})
+                        commits_response.raise_for_status()
+                        commits_data = commits_response.json()
+
+                        # Extract latest commit info
+                        latest_commit = commits_data[0] if commits_data else None
+
+                        # Truncate description to 200 characters
+                        description = repo_data.get("description", "") or ""
+                        if len(description) > 200:
+                            description = description[:197] + "..."
+
+                        return {
+                            "name": repo_name,
+                            "description": description,
+                            "last_commit_date": latest_commit["commit"]["author"]["date"] if latest_commit else None,
+                            "last_commit_hash": latest_commit["sha"] if latest_commit else None
+                        }
+                    except Exception as e:
+                        logger.error(f"Error fetching details for {repo_name}: {e}")
+                        # Return basic info if fetch fails
+                        return {
+                            "name": repo_name,
+                            "description": "",
+                            "last_commit_date": None,
+                            "last_commit_hash": None,
+                            "error": str(e)
+                        }
+
+            # Fetch all repo details in parallel
+            tasks = [fetch_repo_details(repo) for repo in repos]
+            repo_details = await asyncio.gather(*tasks)
+
         return json.dumps({
             "owner": GITHUB_REPO_OWNER,
             "default_repo": DEFAULT_REPO,
-            "repositories": repos,
-            "count": len(repos)
+            "repositories": repo_details,
+            "count": len(repo_details)
         }, indent=2)
     except BlogError as e:
         # Specific errors from get_available_repos

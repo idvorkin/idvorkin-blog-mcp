@@ -13,9 +13,11 @@ A FastMCP server that provides tools for interacting with Igor's blog at [idvork
 ## Architecture
 
 - **FastMCP 2.0**: High-level Python framework that handles all MCP protocol details
-- **GitHub Source**: Reads markdown files directly from the `idvorkin/idvorkin.github.io` repository
+- **Multi-Repo Support**: Works with multiple GitHub repositories via repo parameters
+- **GitHub Source**: Reads markdown files directly from GitHub repositories
 - **Simple Tools**: Each tool is just a decorated Python function - no manual protocol implementation
 - **Type Safety**: Automatic schema generation from Python type hints
+- **Per-Repo Caching**: Each repository has its own cache for optimal performance
 
 ### Sequence Diagrams
 
@@ -78,15 +80,19 @@ sequenceDiagram
 
 ## Features
 
-This MCP server provides 7 tools for blog interaction:
+This MCP server provides 9 tools for repository interaction:
 
-1. **blog_info** - Get information about the blog
-2. **random_blog** - Get a random blog post (with optional content)
-3. **read_blog_post** - Read a specific blog post by URL, redirect path, or markdown path
-4. **random_blog_url** - Get a random blog post URL
-5. **blog_search** - Search blog posts by query (returns JSON)
-6. **recent_blog_posts** - Get the most recent blog posts (returns JSON)
-7. **all_blog_posts** - Get all blog posts (returns JSON)
+1. **list_repos** - List all available repositories
+2. **blog_info** - Get information about a repository
+3. **random_blog** - Get a random blog post (with optional content)
+4. **read_blog_post** - Read a specific blog post by URL, redirect path, or markdown path
+5. **random_blog_url** - Get a random blog post URL
+6. **blog_search** - Search blog posts by query (returns JSON)
+7. **recent_blog_posts** - Get the most recent blog posts (returns JSON)
+8. **all_blog_posts** - Get all blog posts (returns JSON)
+9. **get_recent_changes** - Get recent commits from the repository
+
+All tools (except `list_repos`) accept an optional `repo` parameter to specify which repository to use.
 
 ## Installation
 
@@ -119,9 +125,20 @@ just serve-http [PORT]  # defaults to port 8000
 
 ## Configuration
 
+### Environment Variables
+
+The server supports the following environment variables:
+
+| Variable | Description | Default | Example |
+|----------|-------------|---------|---------|
+| `GITHUB_REPO_OWNER` | GitHub username or organization | `idvorkin` | `myusername` |
+| `GITHUB_REPOS` | Comma-separated list of repos or `*` for all | `idvorkin.github.io` | `repo1,repo2,repo3` or `*` |
+| `DEFAULT_REPO` | Default repository when not specified | `idvorkin.github.io` | `my-blog` |
+| `BLOG_URL` | Base URL for blog (optional) | `https://idvork.in` | `https://myblog.com` |
+
 ### MCP Client Configuration
 
-Add this to your MCP client configuration:
+#### Single Repository (Default)
 
 ```json
 {
@@ -135,23 +152,84 @@ Add this to your MCP client configuration:
 }
 ```
 
+#### Multiple Specific Repositories
+
+```json
+{
+  "mcpServers": {
+    "idvorkin-repos": {
+      "command": "uv",
+      "args": ["run", "python", "/path/to/blog_mcp_server.py"],
+      "env": {
+        "GITHUB_REPO_OWNER": "idvorkin",
+        "GITHUB_REPOS": "idvorkin.github.io,nlp,techlead",
+        "DEFAULT_REPO": "idvorkin.github.io"
+      }
+    }
+  }
+}
+```
+
+#### All Repositories (Wildcard)
+
+```json
+{
+  "mcpServers": {
+    "idvorkin-all": {
+      "command": "uv",
+      "args": ["run", "python", "/path/to/blog_mcp_server.py"],
+      "env": {
+        "GITHUB_REPO_OWNER": "idvorkin",
+        "GITHUB_REPOS": "*",
+        "DEFAULT_REPO": "idvorkin.github.io"
+      }
+    }
+  }
+}
+```
+
 ## Tools Documentation
 
-### blog_info
+### list_repos
 
-Get information about Igor's blog.
+List all available repositories that can be accessed.
 
 **Parameters:** None
 
-**Returns:** Blog information including URL, description, and available tools.
+**Returns:** List of available repositories with the default repo highlighted.
+
+**Example:**
+```
+Available repositories for idvorkin:
+Total: 5 repos
+Default repo: idvorkin.github.io
+
+Repositories:
+  - idvorkin.github.io
+  - nlp
+  - techlead
+  - notes
+  - dotfiles
+```
+
+### blog_info
+
+Get information about a repository.
+
+**Parameters:**
+
+- `repo` (string, optional): Repository name (defaults to configured default repo)
+
+**Returns:** Repository information including owner, GitHub URL, and available tools.
 
 ### random_blog
 
-Get a random blog post from the site.
+Get a random blog post from the repository.
 
 **Parameters:**
 
 - `include_content` (boolean, optional): Whether to include full content (default: true)
+- `repo` (string, optional): Repository name (defaults to configured default repo)
 
 **Returns:** Random blog post with title, URL, date, and content (if requested).
 
@@ -162,6 +240,7 @@ Read a specific blog post by URL, redirect path, or markdown path.
 **Parameters:**
 
 - `url` (string, required): The URL, redirect path (e.g., "42"), or markdown path (e.g., "_d/42.md")
+- `repo` (string, optional): Repository name (defaults to configured default repo)
 
 **Returns:** Blog post content with title, URL, date, and full content.
 
@@ -169,7 +248,9 @@ Read a specific blog post by URL, redirect path, or markdown path.
 
 Get a random blog post URL.
 
-**Parameters:** None
+**Parameters:**
+
+- `repo` (string, optional): Repository name (defaults to configured default repo)
 
 **Returns:** A random blog post URL as plain text.
 
@@ -181,6 +262,7 @@ Search blog posts by title or content.
 
 - `query` (string, required): Search query to find relevant posts
 - `limit` (integer, optional): Maximum number of results (default: 5, max: 20)
+- `repo` (string, optional): Repository name (defaults to configured default repo)
 
 **Returns:** JSON with matching blog posts including titles, URLs, descriptions, and metadata.
 
@@ -190,17 +272,34 @@ Get the most recent blog posts.
 
 **Parameters:**
 
-- `limit` (integer, optional): Maximum number of posts (default: 20, max: 100)
+- `limit` (integer, optional): Maximum number of posts (default: 20, max: 50)
+- `repo` (string, optional): Repository name (defaults to configured default repo)
 
 **Returns:** JSON with recent blog posts sorted by last modified date.
 
 ### all_blog_posts
 
-Get all blog posts from the site.
+Get all blog posts from the repository.
 
-**Parameters:** None
+**Parameters:**
+
+- `repo` (string, optional): Repository name (defaults to configured default repo)
 
 **Returns:** JSON with all blog posts and their metadata.
+
+### get_recent_changes
+
+Get recent commits from the GitHub repository.
+
+**Parameters:**
+
+- `path` (string, optional): File/directory path to filter changes
+- `days` (integer, optional): Number of days to look back (mutually exclusive with commits)
+- `commits` (integer, optional): Number of recent commits (default: 10, max: 100)
+- `include_diff` (boolean, optional): Whether to include diff content (default: false)
+- `repo` (string, optional): Repository name (defaults to configured default repo)
+
+**Returns:** Formatted list of recent commits with file changes.
 
 ## Development
 

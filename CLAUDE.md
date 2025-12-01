@@ -21,16 +21,22 @@ Configure repository access using these environment variables:
   - This is the blog repo used for all tools when no `repo` parameter is provided
 - **BACKLINKS_PATH**: Path to back-links.json in each repo (default: `back-links.json`)
 - **BLOG_URL**: Public blog URL (default: `https://idvork.in`)
+- **GITHUB_TOKEN**: Optional GitHub personal access token (default: None)
+  - Increases API rate limit from 60/hour (unauthenticated) to 5,000/hour (authenticated)
+  - Required for: large repo lists, frequent `list_repos` calls, private repositories
+  - Get token from: https://github.com/settings/tokens
+  - Scopes needed: `public_repo` (or `repo` for private repos)
 
 ### Recommended Configuration
 
-For Igor's setup (blog as default, access to all repos):
+For Igor's setup (blog as default, access to all repos with authentication):
 
 ```bash
 GITHUB_REPO_OWNER=idvorkin
 GITHUB_REPOS=*
 DEFAULT_REPO=idvorkin.github.io
 BLOG_URL=https://idvork.in
+GITHUB_TOKEN=ghp_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
 ```
 
 This configuration:
@@ -159,7 +165,7 @@ The JSON format enables:
 
 ### FastMCP Cloud (Automatic)
 
-- **Live URL**: https://idvorkin-blog-mcp.fastmcp.app/mcp
+- **Live URL**: https://idvorkin-blog-and-repo.fastmcp.app/mcp
 - **Auto-deployment**: Automatically deploys on push to main branch
 - **Authentication**: Requires API key for access
 

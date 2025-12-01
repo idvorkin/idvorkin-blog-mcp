@@ -4,6 +4,47 @@
 
 This is a Blog MCP Server built with FastMCP that provides tools for interacting with Igor's blog.
 
+## Configuration
+
+The server supports multi-repository access via environment variables. See `.env.example` for all configuration options.
+
+### Multi-Repository Support
+
+Configure repository access using these environment variables:
+
+- **GITHUB_REPO_OWNER**: GitHub username or organization (default: `idvorkin`)
+- **GITHUB_REPOS**: Repository specification
+  - Single repo: `"idvorkin.github.io"`
+  - Multiple repos: `"repo1,repo2,repo3"` (comma-separated)
+  - All repos: `"*"` (wildcard - enables access to all public repos)
+- **DEFAULT_REPO**: Default repository when none specified (default: `idvorkin.github.io`)
+  - This is the blog repo used for all tools when no `repo` parameter is provided
+- **BACKLINKS_PATH**: Path to back-links.json in each repo (default: `back-links.json`)
+- **BLOG_URL**: Public blog URL (default: `https://idvork.in`)
+
+### Recommended Configuration
+
+For Igor's setup (blog as default, access to all repos):
+
+```bash
+GITHUB_REPO_OWNER=idvorkin
+GITHUB_REPOS=*
+DEFAULT_REPO=idvorkin.github.io
+BLOG_URL=https://idvork.in
+```
+
+This configuration:
+- Sets `idvorkin.github.io` as the default blog repository
+- Enables searching across all repositories under the `idvorkin` account
+- All tools default to the blog repo unless explicitly given a different repo parameter
+
+### Using Multi-Repo Features
+
+All tools accept an optional `repo` parameter:
+- `blog_search("python", repo="my-other-repo")` - Search in specific repo
+- `blog_search("python")` - Defaults to DEFAULT_REPO (idvorkin.github.io)
+- `list_repos()` - Shows all available repositories
+
 ## FastMCP Architecture
 
 - Uses `@mcp.tool` decorators to automatically expose functions as MCP tools

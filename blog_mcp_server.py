@@ -3,7 +3,15 @@
 Blog MCP Server
 
 A FastMCP server that provides tools for interacting with Igor's blog at idvork.in.
-This server offers eight tools:
+
+Multi-Repository Support:
+- Supports multiple repositories via GITHUB_REPOS environment variable
+- Wildcard support (*) to access all repos under GITHUB_REPO_OWNER
+- Dynamic default branch detection (main/master)
+- Per-repository caching with 5-minute TTL
+
+This server offers nine tools:
+- list_repos: List all available repositories
 - blog_info: Get information about the blog
 - random_blog: Get a random blog post
 - read_blog_post: Read a specific blog post by URL
@@ -17,6 +25,7 @@ This server offers eight tools:
 import asyncio
 import json
 import logging
+import os
 import random
 import re
 import time
@@ -30,22 +39,200 @@ from fastmcp import FastMCP
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+# ============================================================================
+# Environment Configuration
+# ============================================================================
+# GITHUB_REPO_OWNER: GitHub user/org name (default: "idvorkin")
+#   Example: GITHUB_REPO_OWNER="myorg"
+#
+# GITHUB_REPOS: Repository specification (default: "idvorkin.github.io")
+#   - Single repo: "idvorkin.github.io"
+#   - Multiple repos: "repo1,repo2,repo3" (comma-separated, whitespace trimmed)
+#   - All user repos: "*" (fetches all public repos via GitHub API)
+#   Example: GITHUB_REPOS="blog,docs,wiki" or GITHUB_REPOS="*"
+#
+# DEFAULT_REPO: Fallback repo when none specified (default: "idvorkin.github.io")
+#   Must be included in GITHUB_REPOS list
+#   Example: DEFAULT_REPO="blog"
+#
+# BLOG_URL: Public blog URL (default: "https://idvork.in")
+#   Used for generating blog post URLs in responses
+#   Example: BLOG_URL="https://myblog.com"
+#
+# BACKLINKS_PATH: Path to back-links.json in repo (default: "back-links.json")
+#   Relative path from repository root
+#   Example: BACKLINKS_PATH="data/back-links.json"
+# ============================================================================
+
+GITHUB_REPO_OWNER = os.getenv("GITHUB_REPO_OWNER", "idvorkin")
+GITHUB_REPOS = os.getenv("GITHUB_REPOS", "idvorkin.github.io")
+DEFAULT_REPO = os.getenv("DEFAULT_REPO", "idvorkin.github.io")
+BLOG_URL = os.getenv("BLOG_URL", "https://idvork.in")
+BACKLINKS_PATH = os.getenv("BACKLINKS_PATH", "back-links.json")
+
+# ============================================================================
+# Multi-Repo Caching Architecture
+# ============================================================================
+# _available_repos: Cached list of available repositories (loaded once)
+#   - None until first load
+#   - Populated from GITHUB_REPOS (explicit list or wildcard expansion)
+#
+# _repo_default_branches: Maps repo name -> default branch name (e.g., "main" or "master")
+#   - Cached for lifetime of server (no TTL)
+#   - Server restart required if repository changes default branch
+#
+# _repo_caches: Maps repo name -> parsed back-links.json data
+#   - Contains url_info and redirects for each repository
+#   - Refreshed after CACHE_DURATION expires
+#
+# _repo_cache_timestamps: Maps repo name -> last fetch timestamp (unix time)
+#   - Used to determine cache freshness
+#
+# CACHE_DURATION: Time-to-live for back-links cache (300s = 5 minutes)
+#   - Fresh cache served within this window
+#   - After expiry, fetch attempted; falls back to expired cache on failure
+#   - No maximum age limit for expired cache fallback
+# ============================================================================
+
+_available_repos: Optional[list[str]] = None
+_repo_default_branches: dict[str, str] = {}
+_repo_caches: dict[str, dict] = {}
+_repo_cache_timestamps: dict[str, float] = {}
+CACHE_DURATION = 300  # 5 minutes
+
 # Server configuration
 mcp = FastMCP("blog-mcp-server")
-GITHUB_REPO_URL = "https://api.github.com/repos/idvorkin/idvorkin.github.io"
-BLOG_URL = "https://idvork.in"
-BACKLINKS_URL = "https://raw.githubusercontent.com/idvorkin/idvorkin.github.io/master/back-links.json"
-
-# Cache for back-links data (expires after 5 minutes)
-_blog_cache: Optional[dict] = None
-_cache_timestamp: float = 0
-CACHE_DURATION = 300  # 5 minutes
 
 
 class BlogError(Exception):
     """Base exception for blog operations."""
 
     pass
+
+
+async def get_available_repos() -> list[str]:
+    """Get list of available repositories based on configuration."""
+    global _available_repos
+
+    if _available_repos is not None:
+        return _available_repos
+
+    if GITHUB_REPOS == "*":
+        # Fetch all repos for the user (with pagination support)
+        try:
+            async with httpx.AsyncClient(timeout=30.0) as client:
+                url = f"https://api.github.com/users/{GITHUB_REPO_OWNER}/repos"
+                # Set per_page=100 to reduce API calls (GitHub default is 30, max is 100)
+                response = await client.get(url, params={"per_page": 100})
+                response.raise_for_status()
+                repos_data = response.json()
+                _available_repos = [repo["name"] for repo in repos_data]
+                logger.info(f"Loaded {len(_available_repos)} repositories for {GITHUB_REPO_OWNER}")
+                return _available_repos
+        except httpx.HTTPStatusError as e:
+            logger.error(f"HTTP error fetching repositories for {GITHUB_REPO_OWNER}: {e.response.status_code}")
+            if e.response.status_code == 404:
+                raise BlogError(
+                    f"GitHub user '{GITHUB_REPO_OWNER}' not found. "
+                    f"Check GITHUB_REPO_OWNER environment variable."
+                ) from e
+            elif e.response.status_code == 403:
+                raise BlogError(
+                    f"GitHub API rate limit exceeded or access forbidden for user '{GITHUB_REPO_OWNER}'. "
+                    f"Try again later or use explicit repo list instead of wildcard."
+                ) from e
+            else:
+                raise BlogError(f"Failed to fetch repositories from GitHub API: HTTP {e.response.status_code}") from e
+        except httpx.TimeoutException as e:
+            logger.error(f"Timeout fetching repositories for {GITHUB_REPO_OWNER}")
+            raise BlogError(
+                f"Timeout connecting to GitHub API to fetch repositories. "
+                f"Check network connectivity or use explicit repo list."
+            ) from e
+        except Exception as e:
+            logger.error(f"Unexpected error fetching repositories for {GITHUB_REPO_OWNER}: {e}")
+            raise BlogError(f"Failed to fetch repository list: {str(e)}") from e
+    else:
+        # Parse comma-separated list
+        _available_repos = [repo.strip() for repo in GITHUB_REPOS.split(",")]
+        return _available_repos
+
+
+def validate_repo(repo: Optional[str]) -> str:
+    """Validate and return the repo name, using default if not specified.
+
+    Note: This is a synchronous function that validates against cached repository list.
+    If repositories haven't been initialized yet, validation is skipped to allow
+    bootstrap. This means the first calls may use invalid repos before initialization
+    completes, but they will fail later when actually fetching data.
+    """
+    if repo is None:
+        return DEFAULT_REPO
+
+    # If repos haven't been loaded yet, allow any repo
+    # (will be validated when actually used in async context)
+    if _available_repos is None:
+        logger.warning(
+            f"Repository validation called before initialization for '{repo}', "
+            f"allowing without validation"
+        )
+        return repo
+
+    if repo not in _available_repos:
+        available_list = ', '.join(_available_repos)
+        raise BlogError(
+            f"Repository '{repo}' not found in configured repositories. "
+            f"Available repositories: {available_list}. "
+            f"Use list_repos tool to see available repositories or check GITHUB_REPOS environment variable."
+        )
+
+    return repo
+
+
+async def get_default_branch(repo: str) -> str:
+    """Get the default branch for a repository (cached).
+
+    Note: This cache persists for the lifetime of the server. If a repository
+    changes its default branch, the server must be restarted to pick up the change.
+    """
+    global _repo_default_branches
+
+    if repo in _repo_default_branches:
+        return _repo_default_branches[repo]
+
+    try:
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            url = f"https://api.github.com/repos/{GITHUB_REPO_OWNER}/{repo}"
+            response = await client.get(url)
+            response.raise_for_status()
+            repo_data = response.json()
+            default_branch = repo_data.get("default_branch", "main")
+            _repo_default_branches[repo] = default_branch
+            logger.info(f"Default branch for {GITHUB_REPO_OWNER}/{repo}: {default_branch}")
+            return default_branch
+    except httpx.HTTPStatusError as e:
+        logger.error(f"HTTP error fetching default branch for {repo}: {e.response.status_code}")
+        if e.response.status_code == 404:
+            raise BlogError(
+                f"Repository '{GITHUB_REPO_OWNER}/{repo}' not found. "
+                f"Check repository name or use list_repos tool to see available repositories."
+            ) from e
+        elif e.response.status_code == 403:
+            raise BlogError(
+                f"Access forbidden to repository '{GITHUB_REPO_OWNER}/{repo}'. "
+                f"Check permissions or API rate limit."
+            ) from e
+        else:
+            raise BlogError(f"Failed to get repository info: HTTP {e.response.status_code}") from e
+    except httpx.TimeoutException as e:
+        logger.error(f"Timeout fetching default branch for {repo}")
+        raise BlogError(
+            f"Timeout fetching repository '{repo}' information. "
+            f"Check network connectivity."
+        ) from e
+    except Exception as e:
+        logger.error(f"Unexpected error fetching default branch for {repo}: {e}")
+        raise BlogError(f"Failed to get default branch for repository '{repo}': {str(e)}") from e
 
 
 async def fetch_url(url: str) -> str:
@@ -56,14 +243,18 @@ async def fetch_url(url: str) -> str:
             response.raise_for_status()
 
             # Limit response size to prevent memory issues
+            # 1MB limit chosen as blog posts should be <100KB; anything larger is likely binary/corrupt
             content = response.text
-            if len(content) > 1_000_000:  # 1MB limit
+            if len(content) > 1_000_000:
                 logger.warning(
-                    f"Content from {url} is very large ({len(content)} chars), truncating"
+                    f"Content from {url} is very large ({len(content)} chars), truncating to 1MB"
                 )
                 content = content[:1_000_000]
 
             return content
+        except httpx.HTTPStatusError as e:
+            logger.error(f"HTTP error fetching {url}: {e}")
+            raise BlogError(f"Failed to fetch {url}: HTTP {e.response.status_code}") from e
         except httpx.HTTPError as e:
             logger.error(f"HTTP error fetching {url}: {e}")
             raise BlogError(f"Failed to fetch {url}: {e}") from e
@@ -72,47 +263,108 @@ async def fetch_url(url: str) -> str:
             raise BlogError(f"Unexpected error fetching {url}: {e}") from e
 
 
-async def get_blog_data() -> dict:
-    """Get cached blog data from back-links.json file."""
-    global _blog_cache, _cache_timestamp
+async def get_blog_data(repo: Optional[str] = None) -> dict:
+    """Get cached blog data from back-links.json file for a specific repository.
 
+    Cache behavior:
+    - Fresh data cached for 5 minutes (CACHE_DURATION)
+    - On fetch failure, expired cache is used if available (no max age limit)
+    - If no cache exists and fetch fails, error is raised
+    """
+    global _repo_caches, _repo_cache_timestamps
+
+    repo = validate_repo(repo)
     current_time = time.time()
 
     # Return cached data if still valid
-    if _blog_cache and (current_time - _cache_timestamp) < CACHE_DURATION:
-        return _blog_cache
+    if repo in _repo_caches and (current_time - _repo_cache_timestamps.get(repo, 0)) < CACHE_DURATION:
+        return _repo_caches[repo]
 
     try:
-        logger.info("Fetching fresh blog data from back-links.json")
-        content = await fetch_url(BACKLINKS_URL)
-        _blog_cache = json.loads(content)
-        _cache_timestamp = current_time
+        # Get default branch for this repo
+        default_branch = await get_default_branch(repo)
 
-        logger.info(f"Cached {len(_blog_cache.get('url_info', {}))} blog entries")
-        return _blog_cache
+        # Construct backlinks URL
+        backlinks_url = f"https://raw.githubusercontent.com/{GITHUB_REPO_OWNER}/{repo}/{default_branch}/{BACKLINKS_PATH}"
 
+        logger.info(f"Fetching fresh blog data from {backlinks_url}")
+        content = await fetch_url(backlinks_url)
+        _repo_caches[repo] = json.loads(content)
+        _repo_cache_timestamps[repo] = current_time
+
+        logger.info(f"Cached {len(_repo_caches[repo].get('url_info', {}))} blog entries for {repo}")
+        return _repo_caches[repo]
+
+    except httpx.HTTPStatusError as e:
+        logger.error(f"HTTP error fetching back-links.json for {repo}: {e.response.status_code}")
+
+        # Try expired cache first (resilience for transient failures)
+        if repo in _repo_caches:
+            logger.warning(f"Using expired cache for {repo} due to HTTP {e.response.status_code} error")
+            return _repo_caches[repo]
+
+        # No cache available - surface specific error
+        if e.response.status_code == 404:
+            raise BlogError(
+                f"Blog data file not found for repository '{repo}'. "
+                f"The repository may not have a '{BACKLINKS_PATH}' file on branch '{await get_default_branch(repo)}', "
+                f"or the default branch detection failed."
+            ) from e
+        elif e.response.status_code == 403:
+            raise BlogError(
+                f"Access forbidden to repository '{repo}'. "
+                f"Check permissions or API rate limit."
+            ) from e
+        else:
+            raise BlogError(f"Failed to fetch blog data: HTTP {e.response.status_code}") from e
+    except json.JSONDecodeError as e:
+        logger.error(f"Invalid JSON in back-links.json for {repo}: {e}")
+        if repo in _repo_caches:
+            logger.warning(f"Using expired cache for {repo} due to JSON parse error")
+            return _repo_caches[repo]
+        raise BlogError(
+            f"Invalid blog data format for repository '{repo}'. "
+            f"The {BACKLINKS_PATH} file may be corrupted."
+        ) from e
+    except BlogError:
+        # Re-raise BlogErrors (from get_default_branch or fetch_url)
+        # But try expired cache first
+        if repo in _repo_caches:
+            logger.warning(f"Using expired cache for {repo} due to error")
+            return _repo_caches[repo]
+        raise
     except Exception as e:
-        logger.error(f"Failed to fetch back-links.json: {e}")
-        # Fall back to cached data if available, even if expired
-        if _blog_cache:
-            logger.warning("Using expired cache due to fetch failure")
-            return _blog_cache
-        raise BlogError(f"Failed to get blog data: {e}") from e
+        logger.error(f"Unexpected error fetching back-links.json for {repo}: {e}")
+        if repo in _repo_caches:
+            logger.warning(f"Using expired cache for {repo} due to unexpected error: {e}")
+            return _repo_caches[repo]
+        raise BlogError(f"Failed to fetch blog data for repository '{repo}': {str(e)}") from e
 
 
-async def get_blog_files() -> list[dict]:
-    """Get all blog post files - optimized to use back-links.json."""
+async def get_blog_files(repo: Optional[str] = None) -> list[dict]:
+    """Get all blog post files - optimized to use back-links.json.
+
+    Blog post directories:
+    - _d/: Main blog posts (Jekyll drafts/documents)
+    - _posts/: Published Jekyll posts
+    - td/: Technical documentation posts
+    """
     try:
-        blog_data = await get_blog_data()
+        # Note: get_blog_data validates repo, no need to validate here
+        blog_data = await get_blog_data(repo)
         url_info = blog_data.get("url_info", {})
+
+        # Get default branch for constructing URLs
+        repo_name = repo if repo else DEFAULT_REPO
+        default_branch = await get_default_branch(repo_name)
 
         blog_files = []
         for url, info in url_info.items():
-            # Include blog posts from _d/, _posts/, and td/ directories
             markdown_path = info.get("markdown_path", "")
             if not markdown_path:
                 continue
-            # Include posts from _d/, _posts/, and td/ directories
+
+            # Filter to blog post directories only
             if not (markdown_path.startswith("_d/") or
                     markdown_path.startswith("_posts/") or
                     markdown_path.startswith("td/")):
@@ -122,22 +374,25 @@ async def get_blog_files() -> list[dict]:
             blog_file = {
                 "name": markdown_path.split("/")[-1] if "/" in markdown_path else markdown_path,
                 "path": markdown_path,
-                "download_url": f"https://raw.githubusercontent.com/idvorkin/idvorkin.github.io/master/{markdown_path}",
-                "html_url": f"{BLOG_URL}{url}",  # Use the actual blog URL
+                "download_url": f"https://raw.githubusercontent.com/{GITHUB_REPO_OWNER}/{repo_name}/{default_branch}/{markdown_path}",
+                "html_url": f"{BLOG_URL}{url}",
             }
             blog_files.append(blog_file)
 
-        logger.info(f"Found {len(blog_files)} blog files (optimized)")
-        return blog_files  # Return all blog files
+        logger.info(f"Found {len(blog_files)} blog files for {repo_name} (optimized)")
+        return blog_files
 
+    except BlogError:
+        # Re-raise BlogErrors as-is (from get_blog_data or get_default_branch)
+        raise
     except Exception as e:
-        logger.error(f"Error getting blog files: {e}")
-        return []
+        logger.error(f"Unexpected error getting blog files for {repo}: {type(e).__name__}: {e}")
+        raise BlogError(f"Failed to get blog files for repository '{repo}': {str(e)}") from e
 
 
-async def get_blog_post_by_markdown_path(markdown_path: str) -> Optional[dict]:
+async def get_blog_post_by_markdown_path(markdown_path: str, repo: Optional[str] = None) -> Optional[dict]:
     """Helper to fetch and parse a specific blog post by its markdown path."""
-    blog_files = await get_blog_files()
+    blog_files = await get_blog_files(repo)
     for file_info in blog_files:
         if file_info["path"] == markdown_path:
             return await parse_markdown_content(file_info)
@@ -195,7 +450,6 @@ async def parse_markdown_content(file_info: dict) -> dict:
         # Clean up content - remove excessive whitespace
         content = re.sub(r"\n\s*\n", "\n\n", content).strip()
 
-        # Don't clip content length
         content_text = content
         excerpt_text = content[:200] + "..." if len(content) > 200 else content
 
@@ -221,16 +475,52 @@ async def parse_markdown_content(file_info: dict) -> dict:
 
 
 @mcp.tool
-def blog_info() -> str:
-    """Get information about Igor's blog at idvork.in"""
+async def list_repos() -> str:
+    """List all available repositories.
+
+    Use this to discover which repositories are accessible before calling
+    other tools with the repo parameter. If GITHUB_REPOS="*", this will
+    show all public repos for GITHUB_REPO_OWNER.
+    """
+    try:
+        repos = await get_available_repos()
+        return json.dumps({
+            "owner": GITHUB_REPO_OWNER,
+            "default_repo": DEFAULT_REPO,
+            "repositories": repos,
+            "count": len(repos)
+        }, indent=2)
+    except BlogError as e:
+        # Specific errors from get_available_repos
+        logger.error(f"BlogError in list_repos: {e}")
+        return json.dumps({
+            "error": str(e),
+            "owner": GITHUB_REPO_OWNER,
+            "default_repo": DEFAULT_REPO
+        }, indent=2)
+    except Exception as e:
+        # Unexpected errors
+        logger.error(f"Unexpected error in list_repos: {e}")
+        return json.dumps({
+            "error": f"Unexpected error listing repositories: {str(e)}",
+            "owner": GITHUB_REPO_OWNER,
+            "default_repo": DEFAULT_REPO
+        }, indent=2)
+
+
+@mcp.tool
+def blog_info(repo: Optional[str] = None) -> str:
+    """Get information about the blog. Optionally specify a repository."""
+    repo_name = repo if repo else DEFAULT_REPO
     return f"""Blog Information:
 - URL: {BLOG_URL}
-- Name: Igor's Blog  
-- Description: Personal blog by Igor Dvorkin covering technology, leadership, and life insights
-- Source: Markdown files from GitHub repository (idvorkin/idvorkin.github.io)
-- MCP server for interacting with the blog content directly from GitHub.
+- Owner: {GITHUB_REPO_OWNER}
+- Repository: {repo_name}
+- Description: MCP server for interacting with blog content directly from GitHub
+- Source: Markdown files from GitHub repository ({GITHUB_REPO_OWNER}/{repo_name})
 
 Available tools:
+- list_repos: List all available repositories
 - blog_info: Get this information
 - random_blog: Get a random blog post
 - read_blog_post: Read a specific post by URL
@@ -238,14 +528,15 @@ Available tools:
 - blog_search: Search posts by query (returns JSON)
 - recent_blog_posts: Get the most recent blog posts (returns JSON)
 - all_blog_posts: Get all blog posts (returns JSON)
+- get_recent_changes: Get recent changes/commits
 """
 
 
 @mcp.tool
-async def random_blog(include_content: bool = True) -> str:
-    """Get a random blog post from idvork.in"""
+async def random_blog(include_content: bool = True, repo: Optional[str] = None) -> str:
+    """Get a random blog post. Optionally specify a repository."""
     try:
-        blog_files = await get_blog_files()
+        blog_files = await get_blog_files(repo)
         if not blog_files:
             return "No blog posts found."
 
@@ -262,11 +553,11 @@ async def random_blog(include_content: bool = True) -> str:
 
 
 @mcp.tool
-async def all_blog_posts() -> str:
-    """Get all blog posts from idvork.in as JSON data"""
+async def all_blog_posts(repo: Optional[str] = None) -> str:
+    """Get all blog posts as JSON data. Optionally specify a repository."""
     try:
         # Use cached back-links data for efficiency
-        blog_data = await get_blog_data()
+        blog_data = await get_blog_data(repo)
         url_info = blog_data.get("url_info", {})
 
         if not url_info:
@@ -321,27 +612,28 @@ async def all_blog_posts() -> str:
 
 
 @mcp.tool
-async def read_blog_post(url: str) -> str:
-    """Read a specific blog post by URL, redirect path, or markdown path (e.g., _d/42.md)"""
+async def read_blog_post(url: str, repo: Optional[str] = None) -> str:
+    """Read a specific blog post by URL, redirect path, or markdown path. Optionally specify a repository."""
     if not url or not isinstance(url, str) or len(url.strip()) == 0:
         return "Error: URL must be a non-empty string"
 
     url = url.strip()
 
     try:
-        blog_data = await get_blog_data()
+        blog_data = await get_blog_data(repo)
         url_info = blog_data.get("url_info", {})
         redirects = blog_data.get("redirects", {})  # Get top-level redirects
 
         # Handle different URL formats
         if url.startswith("http"):
             # Full URL - extract path
-            if "idvork.in" in url:
-                path = url.replace("https://idvork.in", "").replace("http://idvork.in", "")
+            blog_domain = BLOG_URL.replace("https://", "").replace("http://", "")
+            if blog_domain in url:
+                path = url.replace(f"https://{blog_domain}", "").replace(f"http://{blog_domain}", "")
                 if not path:
                     path = "/"  # Root path
             else:
-                return "Error: URL must be from idvork.in"
+                return f"Error: URL must be from {blog_domain}"
         elif ".md" in url:
             # Markdown path - just search for it in url_info
             found = False
@@ -369,7 +661,7 @@ async def read_blog_post(url: str) -> str:
             markdown_path = url_info[path].get("markdown_path", "")
             if markdown_path:
                 # Found it! Get the file
-                blog_post = await get_blog_post_by_markdown_path(markdown_path)
+                blog_post = await get_blog_post_by_markdown_path(markdown_path, repo)
                 if blog_post:
                     return format_blog_post(blog_post)
 
@@ -380,39 +672,39 @@ async def read_blog_post(url: str) -> str:
             if target_path in url_info:
                 markdown_path = url_info[target_path].get("markdown_path", "")
                 if markdown_path:
-                    blog_post = await get_blog_post_by_markdown_path(markdown_path)
+                    blog_post = await get_blog_post_by_markdown_path(markdown_path, repo)
                     if blog_post:
                         return format_blog_post(blog_post, f"Blog Post (via redirect from {path})")
 
-        # FALLBACK: Check deprecated redirect_url in url_info (for backward compatibility)
-        # TODO: This can be removed in a future update when all redirects are moved to top-level 'redirects'
+        # FALLBACK: Check redirect_url field in url_info (extreme backward compatibility)
+        # Note: Per data spec, redirect_url in url_info is currently always empty.
+        # All redirects are in the top-level 'redirects' field (checked above).
+        # This fallback is kept for extreme backward compatibility with potential legacy data.
         for url_path, info in url_info.items():
             redirect_url = info.get("redirect_url", "")
             if redirect_url and (redirect_url == path or redirect_url == path.lstrip("/")):
-                # Found a post that redirects to our path
                 markdown_path = info.get("markdown_path", "")
                 if markdown_path:
-                    blog_post = await get_blog_post_by_markdown_path(markdown_path)
+                    blog_post = await get_blog_post_by_markdown_path(markdown_path, repo)
                     if blog_post:
-                        return format_blog_post(blog_post, f"Blog Post (via deprecated redirect from {path})")
-
-        # Future improvements:
-        # - Consider implementing recursive redirect resolution with depth limit
-        # - Add case-insensitive redirect matching
-        # - Implement more detailed error logging for failed redirects
+                        return format_blog_post(blog_post, f"Blog Post (via redirect from {path})")
 
         return f"Blog post not found for: {url}"
 
+    except BlogError as e:
+        # Expected errors with good messages
+        logger.error(f"BlogError in read_blog_post for URL '{url}': {e}")
+        return f"Error: {str(e)}"
     except Exception as e:
-        logger.error(f"Unexpected error in read_blog_post: {e}")
-        return "An unexpected error occurred while reading the blog post"
+        logger.error(f"Unexpected error in read_blog_post for URL '{url}', repo '{repo}': {e}")
+        return f"An unexpected error occurred while reading the blog post: {str(e)}"
 
 
 @mcp.tool
-async def random_blog_url() -> str:
-    """Get a random blog post URL from idvork.in"""
+async def random_blog_url(repo: Optional[str] = None) -> str:
+    """Get a random blog post URL. Optionally specify a repository."""
     try:
-        blog_files = await get_blog_files()
+        blog_files = await get_blog_files(repo)
         if not blog_files:
             return "No blog posts found."
 
@@ -424,8 +716,8 @@ async def random_blog_url() -> str:
 
 
 @mcp.tool
-async def blog_search(query: str, limit: int = 5) -> str:
-    """Search blog posts by title or content, returning JSON data"""
+async def blog_search(query: str, limit: int = 5, repo: Optional[str] = None) -> str:
+    """Search blog posts by title or content, returning JSON data. Optionally specify a repository."""
     # Validate query parameter
     if not query or not isinstance(query, str) or len(query.strip()) == 0:
         return json.dumps({"error": "Search query is required and must be a non-empty string"})
@@ -443,7 +735,7 @@ async def blog_search(query: str, limit: int = 5) -> str:
 
     try:
         # Use cached back-links data instead of fetching individual files
-        blog_data = await get_blog_data()
+        blog_data = await get_blog_data(repo)
         url_info = blog_data.get("url_info", {})
 
         if not url_info:
@@ -500,8 +792,8 @@ async def blog_search(query: str, limit: int = 5) -> str:
 
 
 @mcp.tool
-async def recent_blog_posts(limit: int = 20) -> str:
-    """Get the most recent blog posts from idvork.in as JSON data"""
+async def recent_blog_posts(limit: int = 20, repo: Optional[str] = None) -> str:
+    """Get the most recent blog posts as JSON data. Optionally specify a repository."""
     # Validate and sanitize limit
     try:
         limit = int(limit)
@@ -512,7 +804,7 @@ async def recent_blog_posts(limit: int = 20) -> str:
 
     try:
         # Use cached back-links data for efficiency
-        blog_data = await get_blog_data()
+        blog_data = await get_blog_data(repo)
         url_info = blog_data.get("url_info", {})
 
         if not url_info:
@@ -575,15 +867,17 @@ async def get_recent_changes(
     path: Optional[str] = None,
     days: Optional[int] = None,
     commits: Optional[int] = None,
-    include_diff: bool = False
+    include_diff: bool = False,
+    repo: Optional[str] = None
 ) -> str:
-    """Get recent changes from the GitHub repository for blog posts.
+    """Get recent changes from the GitHub repository.
 
     Parameters:
     - path: Optional file/directory path to filter changes (e.g., "_d/", "_posts/", "td/")
     - days: Number of days to look back (mutually exclusive with commits)
     - commits: Number of recent commits to include (mutually exclusive with days, default: 10)
     - include_diff: Whether to include the actual diff content (default: False)
+    - repo: Optional repository name (defaults to configured default repo)
 
     Returns formatted list of recent commits with file changes.
     """
@@ -598,6 +892,7 @@ async def get_recent_changes(
         return "Error: 'commits' must be a positive number."
 
     # Validate that if include_diff is true, path must be a specific file (not a directory)
+    # Rationale: Including diffs for multiple files creates massive output; limit to single file
     if include_diff and path:
         if path.endswith('/'):
             return "Error: When include_diff is true, path must be a specific file, not a directory."
@@ -613,6 +908,9 @@ async def get_recent_changes(
         commits = 100  # Cap at 100 to avoid excessive API calls
 
     try:
+        # Validate and get repo
+        repo = validate_repo(repo)
+
         # Build query parameters for commits endpoint
         params = {
             "per_page": commits if commits else 100  # Get more if filtering by date
@@ -631,7 +929,7 @@ async def get_recent_changes(
             params["since"] = since_date.isoformat() + "Z"
 
         # Fetch commits list
-        commits_url = f"{GITHUB_REPO_URL}/commits"
+        commits_url = f"https://api.github.com/repos/{GITHUB_REPO_OWNER}/{repo}/commits"
         async with httpx.AsyncClient(timeout=30.0) as client:
             logger.info(f"Fetching commits from GitHub: {commits_url}")
             response = await client.get(commits_url, params=params)
@@ -646,13 +944,14 @@ async def get_recent_changes(
             commits_data = commits_data[:50]
 
         # Fetch detailed commit info in parallel (with file changes)
-        # Use semaphore to limit concurrent requests to 15
+        # Use semaphore to limit concurrent requests
+        # Limit of 15 prevents overwhelming GitHub API (rate limit: 60/hour unauthenticated, 5000/hour authenticated)
         semaphore = asyncio.Semaphore(15)
 
         async def fetch_commit_details(commit_sha: str) -> dict:
             async with semaphore:
                 async with httpx.AsyncClient(timeout=30.0) as client:
-                    commit_url = f"{GITHUB_REPO_URL}/commits/{commit_sha}"
+                    commit_url = f"https://api.github.com/repos/{GITHUB_REPO_OWNER}/{repo}/commits/{commit_sha}"
                     try:
                         response = await client.get(commit_url)
                         response.raise_for_status()
@@ -699,7 +998,8 @@ async def get_recent_changes(
             # Add commit info
             output_lines.append(f"Commit: {commit['sha'][:7]} ({time_ago})")
             output_lines.append(f"Author: {commit['commit']['author']['name']}")
-            output_lines.append(f"Message: {commit['commit']['message'].split('\n')[0]}")  # First line only
+            commit_message = commit['commit']['message'].split('\n')[0]  # First line only
+            output_lines.append(f"Message: {commit_message}")
 
             # Add file changes - filter for blog files if no specific path was given
             if "files" in commit:

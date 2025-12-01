@@ -80,7 +80,8 @@ class BlogAssertions:
     @staticmethod
     def assert_blog_info(content: str):
         """Assert standard blog info content."""
-        assert "Igor's Blog" in content
+        assert "Blog Information:" in content
+        assert "Owner: idvorkin" in content
         assert "idvork.in" in content
         assert "Available tools:" in content
 

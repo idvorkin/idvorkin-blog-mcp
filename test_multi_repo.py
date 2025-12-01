@@ -85,7 +85,7 @@ class TestMultiRepoSupport:
             response.json = MagicMock(return_value={"default_branch": "main"})
             return response
 
-        mock_client.get = side_effect
+        mock_client.get = AsyncMock(side_effect=side_effect)
 
         # Clear cache first
         blog_mcp_server._repo_default_branches.clear()

@@ -253,6 +253,38 @@ just call-prod TOOL_NAME '{"arg1": "value1"}'
 
 ## Deployment
 
+### FastMCP Cloud (Recommended)
+
+**Production URL**: https://idvorkin-blog-mcp.fastmcp.app/mcp
+
+FastMCP Cloud provides zero-configuration deployment with automatic GitHub integration:
+
+#### Setup Process
+
+1. **Create a Project**
+   - Visit [fastmcp.cloud](https://fastmcp.cloud) and sign in with GitHub
+   - Create a new project and select your repository
+   - Configure:
+     - **Name**: Project identifier (generates URL like `your-name.fastmcp.app/mcp`)
+     - **Entrypoint**: Python file with server (e.g., `blog_mcp_server.py`)
+     - **Authentication**: Toggle to restrict access or allow public access
+
+2. **Automatic Deployment**
+   - FastMCP Cloud automatically detects dependencies from `requirements.txt` or `pyproject.toml`
+   - Deploys immediately after project creation
+   - Monitors your repository for changes
+   - **Auto-redeploys** on every push to `main` branch
+   - Creates **separate preview URLs** for each pull request
+
+3. **Connect to Your Server**
+   - Server is immediately accessible at your assigned URL
+   - Built-in connection options for Claude, Cursor, and other MCP clients
+   - Free during beta period
+
+**Dashboard**: [FastMCP Cloud Dashboard](https://fastmcp.cloud/idvorkin/servers?type=all&search=&selected=idvorkin-blog-mcp)
+
+For more details, see the [FastMCP Cloud Documentation](https://gofastmcp.com/deployment/fastmcp-cloud).
+
 ### Google Cloud Run (Alternative)
 
 ```bash

@@ -45,7 +45,7 @@ logger = logging.getLogger(__name__)
 # GITHUB_REPO_OWNER: GitHub user/org name (default: "idvorkin")
 #   Example: GITHUB_REPO_OWNER="myorg"
 #
-# GITHUB_REPOS: Repository specification (default: "idvorkin.github.io")
+# GITHUB_REPOS: Repository specification (default: "*")
 #   - Single repo: "idvorkin.github.io"
 #   - Multiple repos: "repo1,repo2,repo3" (comma-separated, whitespace trimmed)
 #   - All user repos: "*" (fetches all public repos via GitHub API)
@@ -65,7 +65,7 @@ logger = logging.getLogger(__name__)
 # ============================================================================
 
 GITHUB_REPO_OWNER = os.getenv("GITHUB_REPO_OWNER", "idvorkin")
-GITHUB_REPOS = os.getenv("GITHUB_REPOS", "idvorkin.github.io")
+GITHUB_REPOS = os.getenv("GITHUB_REPOS", "*")
 DEFAULT_REPO = os.getenv("DEFAULT_REPO", "idvorkin.github.io")
 BLOG_URL = os.getenv("BLOG_URL", "https://idvork.in")
 BACKLINKS_PATH = os.getenv("BACKLINKS_PATH", "back-links.json")

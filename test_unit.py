@@ -510,7 +510,7 @@ class TestBlogMCPServer:
         """Test that the FastMCP server is properly configured."""
         assert blog_mcp_server.mcp.name == "blog-mcp-server"
 
-        # Verify tools are registered
+        # Verify tools are registered as callable functions
         expected_tools = [
             "blog_info",
             "random_blog",
@@ -525,7 +525,7 @@ class TestBlogMCPServer:
         for tool_name in expected_tools:
             assert hasattr(blog_mcp_server, tool_name)
             tool = getattr(blog_mcp_server, tool_name)
-            assert tool.__class__.__name__ == "FunctionTool"
+            assert callable(tool)
 
 
 if __name__ == "__main__":

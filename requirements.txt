@@ -1,5 +1,5 @@
 # Core dependencies
-fastmcp>=2.13.1
+fastmcp>=3.0.0
 httpx>=0.25.0
 
 # Development dependencies

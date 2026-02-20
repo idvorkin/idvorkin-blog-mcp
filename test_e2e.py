@@ -52,7 +52,8 @@ class TestE2EBlogMCPServer:
             "blog_search",
             "recent_blog_posts",
             "all_blog_posts",
-            "get_recent_changes"
+            "get_recent_changes",
+            "list_open_prs",
         }
 
         async with MCPTestClient(server_endpoint) as client:
@@ -509,6 +510,32 @@ class TestE2EBlogMCPServer:
             if "Files changed:" in content and "Diff:" in content:
                 # Should have diff indicators like @@ or +/- lines
                 assert ("@@" in content or "+" in content or "-" in content), "Should have diff content"
+
+    async def test_list_open_prs_e2e(self, server_endpoint: str):
+        """Test list_open_prs against live endpoint."""
+        async with MCPTestClient(server_endpoint) as client:
+            content = await client.call_tool("list_open_prs", {"since_days": 7})
+
+            # Should return valid JSON
+            import json
+            data = json.loads(content)
+
+            # Check required top-level fields
+            assert "count" in data, "Missing 'count' field"
+            assert "since_days" in data, "Missing 'since_days' field"
+            assert "pull_requests" in data, "Missing 'pull_requests' field"
+            assert isinstance(data["pull_requests"], list), "'pull_requests' must be a list"
+            assert data["since_days"] == 7, "since_days should be 7"
+            assert data["count"] == len(data["pull_requests"]), "count should match length of pull_requests"
+
+            # If there are PRs, verify structure
+            if data["pull_requests"]:
+                pr = data["pull_requests"][0]
+                required_fields = ["repo", "number", "title", "author", "state", "created_at", "updated_at", "url"]
+                for field in required_fields:
+                    assert field in pr, f"Missing field '{field}' in PR"
+                assert pr["state"] == "open", "All returned PRs should be open"
+                assert pr["url"].startswith("https://github.com/"), "PR URL should be a GitHub URL"
 
     async def test_get_recent_changes_performance(self, server_endpoint: str):
         """Test get_recent_changes handles parallel requests efficiently."""

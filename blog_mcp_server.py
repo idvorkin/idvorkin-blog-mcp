@@ -29,7 +29,7 @@ import os
 import random
 import re
 import time
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 import httpx
@@ -1229,8 +1229,8 @@ async def list_open_prs(
     except (ValueError, TypeError):
         since_days = 7
 
-    # Calculate cutoff datetime
-    cutoff = datetime.now() - timedelta(days=since_days)
+    # Calculate cutoff datetime (UTC to match GitHub's ISO 8601 timestamps)
+    cutoff = datetime.now(timezone.utc) - timedelta(days=since_days)
 
     try:
         # Determine repos to query
@@ -1269,9 +1269,7 @@ async def list_open_prs(
                             continue
                         # Parse ISO 8601 timestamp (GitHub uses Z suffix)
                         updated_at = datetime.fromisoformat(updated_at_str.replace("Z", "+00:00"))
-                        # Make cutoff timezone-aware for comparison
-                        cutoff_aware = cutoff.replace(tzinfo=updated_at.tzinfo)
-                        if updated_at < cutoff_aware:
+                        if updated_at < cutoff:
                             # PRs are sorted by updated desc, so once we pass cutoff we can stop
                             break
                         results.append({

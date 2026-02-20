@@ -513,6 +513,7 @@ class TestBlogMCPServer:
                     for field in required_fields:
                         assert field in post, f"Missing field: {field}"
 
+    @pytest.mark.network
     async def test_list_open_prs_default(self, mcp_server):
         """Test list_open_prs with a specific repo - REAL API CALL."""
         async with MCPTestClient(mcp_server) as client:
@@ -542,6 +543,7 @@ class TestBlogMCPServer:
                 assert pr["state"] == "open", "All returned PRs should be open"
                 assert pr["url"].startswith("https://github.com/"), "PR URL should be a GitHub URL"
 
+    @pytest.mark.network
     async def test_list_open_prs_invalid_days(self, mcp_server):
         """Test list_open_prs clamps negative since_days to 1."""
         async with MCPTestClient(mcp_server) as client:

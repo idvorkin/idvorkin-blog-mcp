@@ -7,12 +7,14 @@ from typing import Any, Dict, Optional
 
 import pytest
 from fastmcp import Client
-from mcp.types import CallToolResult
 
 
-def extract_content_text(result: CallToolResult) -> str:
+def extract_content_text(result) -> str:
     """
     Extract text content from MCP tool result.
+
+    Prefers result.data (FastMCP 3.0 feature) when it is a string,
+    falls back to result.content[0].text for compatibility.
 
     Args:
         result: The tool call result from MCP client
@@ -20,6 +22,11 @@ def extract_content_text(result: CallToolResult) -> str:
     Returns:
         The extracted text content as a string
     """
+    # FastMCP 3.0: result.data is the structured return value.
+    # For string-returning tools it is the plain string directly.
+    if hasattr(result, 'data') and isinstance(result.data, str):
+        return result.data
+
     if not result.content:
         return ""
 

@@ -542,6 +542,7 @@ class TestDirectFunctionCalls:
     called directly as regular Python functions without any protocol overhead.
     """
 
+    @pytest.mark.network
     def test_blog_info_direct(self):
         """Call blog_info() directly and assert the blog URL is present."""
         result = blog_mcp_server.blog_info()

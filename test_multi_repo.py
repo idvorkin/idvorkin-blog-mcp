@@ -30,6 +30,7 @@ class TestMultiRepoSupport:
         """Provide assertions helper."""
         return BlogAssertions()
 
+    @pytest.mark.network
     async def test_list_repos_tool(self, mcp_server):
         """Test list_repos tool returns repository configuration."""
         async with MCPTestClient(mcp_server) as client:

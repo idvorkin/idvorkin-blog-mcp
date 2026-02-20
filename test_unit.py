@@ -99,18 +99,21 @@ class TestBlogMCPServer:
             content = await client.call_tool("blog_info")
             assertions.assert_blog_info(content)
 
+    @pytest.mark.network
     async def test_random_blog_tool_without_content(self, mcp_server, assertions):
         """Test random_blog tool without content."""
         async with MCPTestClient(mcp_server) as client:
             content = await client.call_tool("random_blog", {"include_content": False})
             assertions.assert_random_blog_post(content, with_content=False)
 
+    @pytest.mark.network
     async def test_random_blog_tool_with_content_real(self, mcp_server, assertions):
         """Test random_blog tool with content - REAL API CALL."""
         async with MCPTestClient(mcp_server) as client:
             content = await client.call_tool("random_blog", {"include_content": True})
             assertions.assert_random_blog_post(content, with_content=True)
 
+    @pytest.mark.network
     async def test_random_blog_url_tool(self, mcp_server, assertions):
         """Test random_blog_url tool returns valid URL."""
         async with MCPTestClient(mcp_server) as client:
@@ -123,6 +126,7 @@ class TestBlogMCPServer:
             content = await client.call_tool("read_blog_post", {"url": ""})
             assertions.assert_error_message(content, "Error: URL must be a non-empty string")
 
+    @pytest.mark.network
     async def test_read_blog_post_nonexistent_url(self, mcp_server, assertions):
         """Test read_blog_post with nonexistent URL - NOW FAST with backlinks fix."""
         async with MCPTestClient(mcp_server) as client:
@@ -131,6 +135,7 @@ class TestBlogMCPServer:
             })
             assertions.assert_error_message(content, "Blog post not found")
 
+    @pytest.mark.network
     async def test_blog_search_tool_real(self, mcp_server, assertions):
         """Test blog_search tool with common terms - REAL API CALL."""
         async with MCPTestClient(mcp_server) as client:
@@ -160,6 +165,7 @@ class TestBlogMCPServer:
             content = await client.call_tool("blog_search", {"query": "", "limit": 5})
             assertions.assert_error_message(content, "Search query is required and must be a non-empty string")
 
+    @pytest.mark.network
     async def test_get_recent_changes_default_real(self, mcp_server, assertions):
         """Test get_recent_changes with default parameters - REAL API CALL."""
         async with MCPTestClient(mcp_server) as client:
@@ -372,6 +378,7 @@ class TestBlogMCPServer:
                 assert len(data["posts"]) <= 2, f"Limit not respected: found {len(data['posts'])} results"
                 assert data["limit"] == 2
 
+    @pytest.mark.network
     async def test_recent_blog_posts_real(self, mcp_server):
         """Test recent_blog_posts returns JSON with recent posts - REAL API CALL."""
         async with MCPTestClient(mcp_server) as client:
@@ -506,11 +513,10 @@ class TestBlogMCPServer:
                     for field in required_fields:
                         assert field in post, f"Missing field: {field}"
 
-    def test_server_configuration(self):
-        """Test that the FastMCP server is properly configured."""
+    async def test_server_configuration(self, mcp_server):
+        """Test that the FastMCP server is properly configured with tools registered via MCP client."""
         assert blog_mcp_server.mcp.name == "blog-mcp-server"
 
-        # Verify tools are registered as callable functions
         expected_tools = [
             "blog_info",
             "random_blog",
@@ -519,13 +525,34 @@ class TestBlogMCPServer:
             "blog_search",
             "recent_blog_posts",
             "all_blog_posts",
-            "get_recent_changes"
+            "get_recent_changes",
         ]
 
-        for tool_name in expected_tools:
-            assert hasattr(blog_mcp_server, tool_name)
-            tool = getattr(blog_mcp_server, tool_name)
-            assert callable(tool)
+        async with MCPTestClient(mcp_server) as client:
+            tools = await client.list_tools()
+            tool_names = {t.name for t in tools}
+            for tool_name in expected_tools:
+                assert tool_name in tool_names, f"Tool '{tool_name}' not registered in MCP server"
+
+
+class TestDirectFunctionCalls:
+    """Tests that call decorated functions directly — no MCP Client needed.
+
+    FastMCP 3.0 preserves the original function, so decorated tools can be
+    called directly as regular Python functions without any protocol overhead.
+    """
+
+    @pytest.mark.network
+    def test_blog_info_direct(self):
+        """Call blog_info() directly and assert the blog URL is present."""
+        result = blog_mcp_server.blog_info()
+        assert "idvork.in" in result
+
+    async def test_blog_search_empty_direct(self):
+        """Call blog_search() directly with empty query and assert error in JSON."""
+        result = await blog_mcp_server.blog_search("", 5)
+        data = json.loads(result)
+        assert "error" in data
 
 
 if __name__ == "__main__":

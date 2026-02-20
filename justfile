@@ -11,12 +11,12 @@ fast-test:
 # Run comprehensive test suite
 test:
     @echo "Running comprehensive tests..."
-    uv run pytest test_unit.py test_e2e.py -v --tb=short -n auto
+    uv run pytest test_unit.py test_multi_repo.py test_e2e.py -v --tb=short -n auto
     @echo "✅ All tests completed"
 
 # Run tests with coverage
 test-coverage:
-    uv run pytest test_unit.py test_e2e.py -v --cov=blog_mcp_server --cov-report=term-missing -n auto
+    uv run pytest test_unit.py test_multi_repo.py test_e2e.py -v --cov=blog_mcp_server --cov-report=term-missing -n auto
 
 # Run only unit tests (uses real GitHub API)
 test-unit:
@@ -45,7 +45,7 @@ test-prod-sequential:
 # Run all tests (unit + E2E) in parallel
 test-all:
     @echo "🚀 Running ALL tests in parallel..."
-    uv run pytest test_unit.py test_e2e.py -v --tb=short -n auto
+    uv run pytest test_unit.py test_multi_repo.py test_e2e.py -v --tb=short -n auto
     @echo "✅ All tests completed"
 
 # Performance test with timing

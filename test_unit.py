@@ -513,6 +513,53 @@ class TestBlogMCPServer:
                     for field in required_fields:
                         assert field in post, f"Missing field: {field}"
 
+    async def test_list_open_prs_default(self, mcp_server):
+        """Test list_open_prs with a specific repo - REAL API CALL."""
+        async with MCPTestClient(mcp_server) as client:
+            # Use a specific repo to avoid the wildcard repos-list API call
+            content = await client.call_tool("list_open_prs", {
+                "repo": "idvorkin.github.io",
+                "since_days": 7,
+            })
+
+            # Should return valid JSON
+            data = json.loads(content)
+
+            # Check required top-level fields
+            assert "count" in data, "Missing 'count' field"
+            assert "since_days" in data, "Missing 'since_days' field"
+            assert "pull_requests" in data, "Missing 'pull_requests' field"
+            assert isinstance(data["pull_requests"], list), "'pull_requests' must be a list"
+            assert data["since_days"] == 7, "since_days should be 7"
+            assert data["count"] == len(data["pull_requests"]), "count should match length of pull_requests"
+
+            # If there are PRs, verify their structure
+            if data["pull_requests"]:
+                pr = data["pull_requests"][0]
+                required_fields = ["repo", "number", "title", "author", "state", "created_at", "updated_at", "url"]
+                for field in required_fields:
+                    assert field in pr, f"Missing field '{field}' in PR"
+                assert pr["state"] == "open", "All returned PRs should be open"
+                assert pr["url"].startswith("https://github.com/"), "PR URL should be a GitHub URL"
+
+    async def test_list_open_prs_invalid_days(self, mcp_server):
+        """Test list_open_prs clamps negative since_days to 1."""
+        async with MCPTestClient(mcp_server) as client:
+            # Use a specific repo to avoid the wildcard repos-list API call
+            content = await client.call_tool("list_open_prs", {
+                "repo": "idvorkin.github.io",
+                "since_days": -5,
+            })
+
+            # Should return valid JSON
+            data = json.loads(content)
+
+            # since_days should be clamped to 1
+            assert "since_days" in data, "Missing 'since_days' field"
+            assert data["since_days"] == 1, f"Expected since_days=1 (clamped), got {data['since_days']}"
+            assert "pull_requests" in data, "Missing 'pull_requests' field"
+            assert "count" in data, "Missing 'count' field"
+
     async def test_server_configuration(self, mcp_server):
         """Test that the FastMCP server is properly configured with tools registered via MCP client."""
         assert blog_mcp_server.mcp.name == "blog-mcp-server"
@@ -526,6 +573,7 @@ class TestBlogMCPServer:
             "recent_blog_posts",
             "all_blog_posts",
             "get_recent_changes",
+            "list_open_prs",
         ]
 
         async with MCPTestClient(mcp_server) as client:

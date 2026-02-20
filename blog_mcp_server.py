@@ -1210,5 +1210,106 @@ async def get_recent_changes(
         return f"Error getting recent changes: {str(e)}"
 
 
+@mcp.tool
+async def list_open_prs(
+    repo: Optional[str] = None,
+    since_days: int = 7,
+) -> str:
+    """List open pull requests, optionally filtered by repo and recency.
+
+    Parameters:
+    - repo: Specific repo name, or None for all configured repos
+    - since_days: Only include PRs updated in the last N days (default: 7)
+    """
+    # Validate and clamp since_days
+    try:
+        since_days = int(since_days)
+        if since_days < 1:
+            since_days = 1
+    except (ValueError, TypeError):
+        since_days = 7
+
+    # Calculate cutoff datetime
+    cutoff = datetime.now() - timedelta(days=since_days)
+
+    try:
+        # Determine repos to query
+        if repo is not None:
+            repos_to_query = [validate_repo(repo)]
+        else:
+            repos_to_query = await get_available_repos()
+
+        semaphore = asyncio.Semaphore(15)
+
+        async def fetch_prs_for_repo(repo_name: str) -> list[dict]:
+            async with semaphore:
+                async with httpx.AsyncClient(timeout=30.0, headers=get_github_headers()) as client:
+                    url = f"https://api.github.com/repos/{GITHUB_REPO_OWNER}/{repo_name}/pulls"
+                    params = {
+                        "state": "open",
+                        "sort": "updated",
+                        "direction": "desc",
+                        "per_page": 100,
+                    }
+                    try:
+                        response = await client.get(url, params=params)
+                        response.raise_for_status()
+                        prs_data = response.json()
+                    except httpx.HTTPStatusError as e:
+                        logger.error(f"HTTP error fetching PRs for {repo_name}: {e.response.status_code}")
+                        return []
+                    except Exception as e:
+                        logger.error(f"Error fetching PRs for {repo_name}: {e}")
+                        return []
+
+                    results = []
+                    for pr in prs_data:
+                        updated_at_str = pr.get("updated_at", "")
+                        if not updated_at_str:
+                            continue
+                        # Parse ISO 8601 timestamp (GitHub uses Z suffix)
+                        updated_at = datetime.fromisoformat(updated_at_str.replace("Z", "+00:00"))
+                        # Make cutoff timezone-aware for comparison
+                        cutoff_aware = cutoff.replace(tzinfo=updated_at.tzinfo)
+                        if updated_at < cutoff_aware:
+                            # PRs are sorted by updated desc, so once we pass cutoff we can stop
+                            break
+                        results.append({
+                            "repo": repo_name,
+                            "number": pr.get("number"),
+                            "title": pr.get("title", ""),
+                            "author": pr.get("user", {}).get("login", ""),
+                            "state": pr.get("state", "open"),
+                            "created_at": pr.get("created_at", ""),
+                            "updated_at": updated_at_str,
+                            "url": pr.get("html_url", ""),
+                        })
+                    return results
+
+        # Fetch PRs for all repos in parallel
+        tasks = [fetch_prs_for_repo(r) for r in repos_to_query]
+        results_per_repo = await asyncio.gather(*tasks)
+
+        # Flatten and sort by updated_at descending
+        all_prs = []
+        for pr_list in results_per_repo:
+            all_prs.extend(pr_list)
+
+        all_prs.sort(key=lambda pr: pr.get("updated_at", ""), reverse=True)
+
+        return json.dumps({
+            "count": len(all_prs),
+            "since_days": since_days,
+            "pull_requests": all_prs,
+        }, indent=2)
+
+    except BlogError as e:
+        logger.error(f"BlogError in list_open_prs: {e}")
+        return json.dumps({"error": str(e), "since_days": since_days}, indent=2)
+    except Exception as e:
+        logger.error(f"Unexpected error in list_open_prs: {e}")
+        return json.dumps({"error": f"Unexpected error listing open PRs: {str(e)}", "since_days": since_days}, indent=2)
+
+
 if __name__ == "__main__":
     mcp.run()

@@ -506,13 +506,12 @@ class TestE2EBlogMCPServer:
             assert "owner" in data, "Missing 'owner' field"
             assert "default_repo" in data, "Missing 'default_repo' field"
             assert "repositories" in data, "Missing 'repositories' field"
-            assert "count" in data, "Missing 'count' field"
             assert "pagination" in data, "Missing 'pagination' field"
 
             # Verify values
             assert isinstance(data["repositories"], list)
-            assert data["count"] > 0, "Should have at least one repository"
-            assert len(data["repositories"]) == data["count"]
+            assert data["pagination"]["total_count"] > 0, "Should have at least one repository"
+            assert len(data["repositories"]) > 0
 
     async def test_get_recent_changes_performance(self, server_endpoint: str):
         """Test get_recent_changes handles parallel requests efficiently."""

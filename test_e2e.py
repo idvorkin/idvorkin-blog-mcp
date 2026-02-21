@@ -6,11 +6,11 @@ Tests against live endpoints (local or production) without mocking.
 Use MCP_SERVER_ENDPOINT environment variable to specify the endpoint.
 """
 
-import asyncio
+import json
 import os
 
 import pytest
-from test_utils import MCPTestClient, BlogAssertions
+from test_utils import MCPTestClient
 
 # Server endpoints
 LOCAL_ENDPOINT = "http://localhost:9000/mcp"
@@ -31,11 +31,6 @@ class TestE2EBlogMCPServer:
     def server_endpoint(self) -> str:
         """Get the server endpoint for testing."""
         return get_server_endpoint()
-
-    @pytest.fixture
-    def assertions(self):
-        """Provide assertions helper."""
-        return BlogAssertions()
 
     async def test_server_connectivity(self, server_endpoint: str):
         """Test that server responds to ping."""
@@ -93,35 +88,23 @@ class TestE2EBlogMCPServer:
             content = await client.call_tool("random_blog", {"include_content": True})
             assertions.assert_random_blog_post(content, with_content=True)
 
-    async def test_blog_search_tool(self, server_endpoint: str, assertions):
+    async def test_blog_search_tool(self, server_endpoint: str):
         """Test blog_search tool with common terms."""
-        test_queries = ["leadership", "technology", "the", "career"]
-
         async with MCPTestClient(server_endpoint) as client:
-            for query in test_queries:
-                content = await client.call_tool("blog_search", {"query": query, "limit": 3})
-                # Now returns JSON, parse it
-                import json
-                data = json.loads(content)
+            # "the" is extremely common — must always return results
+            content = await client.call_tool("blog_search", {"query": "the", "limit": 3})
+            data = json.loads(content)
 
-                # Check if we got an error response or actual results
-                if "error" in data:
-                    # Valid error response (no results found)
-                    assert isinstance(data["error"], str)
-                    assert len(data["error"]) > 0
-                else:
-                    # Check structure for successful results
-                    assert "query" in data
-                    assert "count" in data
-                    assert "posts" in data
-                    assert data["query"] == query
+            assert "query" in data
+            assert "count" in data
+            assert "posts" in data
+            assert data["query"] == "the"
+            assert data["count"] > 0, "Common query 'the' should always return results"
 
-                    # If posts exist, check they're valid
-                    if data["posts"]:
-                        for post in data["posts"]:
-                            assert "title" in post
-                            assert "url" in post
-                            assert post["url"].startswith("https://idvork.in/")
+            for post in data["posts"]:
+                assert "title" in post
+                assert "url" in post
+                assert post["url"].startswith("https://idvork.in/")
 
     async def test_blog_search_empty_query(self, server_endpoint: str, assertions):
         """Test blog_search with empty query returns error."""
@@ -132,44 +115,22 @@ class TestE2EBlogMCPServer:
     async def test_blog_search_limit_parameter(self, server_endpoint: str):
         """Test blog_search respects limit parameter."""
         async with MCPTestClient(server_endpoint) as client:
-            # Try with small limit
             content = await client.call_tool("blog_search", {"query": "the", "limit": 2})
+            data = json.loads(content)
+            assert data["count"] > 0, "Common query 'the' should return results"
+            assert len(data["posts"]) <= 2, f"Limit not respected: found {len(data['posts'])} results"
 
-            # If results found, should respect limit
-            if "Found" in content:
-                # Count the number of "Title:" occurrences (each result has one)
-                title_count = content.count("Title:")
-                assert title_count <= 2, f"Limit not respected: found {title_count} results"
-
-    async def test_read_blog_post_valid_url(self, server_endpoint: str, assertions):
+    async def test_read_blog_post_valid_url(self, server_endpoint: str):
         """Test read_blog_post with valid URL returns blog content."""
-        # Use a known stable blog post URL
-        valid_urls = [
-            "https://idvork.in/42",  # What I wish I knew at 42
-            "https://idvork.in/40yo",  # What I wish I knew at 40
-            "https://idvork.in/decisive",  # Decisive post
-            "https://idvork.in/gap-year",  # Gap year post
-        ]
-
         async with MCPTestClient(server_endpoint) as client:
-            for url in valid_urls:
-                content = await client.call_tool("read_blog_post", {"url": url})
+            url = "https://idvork.in/42"
+            content = await client.call_tool("read_blog_post", {"url": url})
 
-                # Should not be an error
-                assert not content.startswith("Error:"), f"Got error for valid URL {url}: {content}"
-
-                # Should contain title and content
-                assert "Title:" in content or "title:" in content, f"Missing title in response for {url}"
-                assert "URL:" in content or "url:" in content, f"Missing URL in response for {url}"
-
-                # Should have substantial content (at least 100 chars)
-                assert len(content) > 100, f"Content too short for {url}: {len(content)} chars"
-
-                # Should contain the actual URL
-                assert url in content, f"URL {url} not found in response"
-
-                # Break after first successful test to avoid rate limiting
-                break
+            assert not content.startswith("Error:"), f"Got error for valid URL {url}: {content}"
+            assert "Title:" in content or "title:" in content, f"Missing title in response for {url}"
+            assert "URL:" in content or "url:" in content, f"Missing URL in response for {url}"
+            assert len(content) > 100, f"Content too short for {url}: {len(content)} chars"
+            assert url in content, f"URL {url} not found in response"
 
     async def test_read_blog_post_with_redirect(self, server_endpoint: str):
         """Test read_blog_post with redirect URLs."""
@@ -261,7 +222,6 @@ class TestE2EBlogMCPServer:
         async with MCPTestClient(server_endpoint) as client:
             content = await client.call_tool("all_blog_posts", {})
 
-            import json
             data = json.loads(content)
 
             # Count posts from different directories
@@ -310,11 +270,9 @@ class TestE2EBlogMCPServer:
         """Test recent_blog_posts function against live endpoint."""
         async with MCPTestClient(server_endpoint) as client:
             content = await client.call_tool("recent_blog_posts", {"limit": 5})
-            
-            # Should return valid JSON
-            import json
+
             data = json.loads(content)
-            
+
             # Check structure
             assert "count" in data
             assert "limit" in data
@@ -322,49 +280,51 @@ class TestE2EBlogMCPServer:
             assert isinstance(data["posts"], list)
             assert data["limit"] == 5
             assert data["count"] <= 5
-            
-            # If posts exist, check structure
-            if data["posts"]:
-                post = data["posts"][0]
-                required_fields = ["title", "url", "description", "last_modified", "doc_size", "markdown_path", "file_path", "redirect_url"]
-                for field in required_fields:
-                    assert field in post, f"Missing field: {field}"
-                
-                # Verify URL format
-                assert post["url"].startswith("https://idvork.in/")
-                
-                # Verify markdown path format
-                assert post["markdown_path"].startswith("_d/")
-                assert post["markdown_path"].endswith(".md")
+
+            # Live endpoint should always have posts
+            assert len(data["posts"]) > 0, "Expected at least one recent post"
+            post = data["posts"][0]
+            required_fields = ["title", "url", "description", "last_modified", "doc_size", "markdown_path", "file_path", "redirect_url"]
+            for field in required_fields:
+                assert field in post, f"Missing field: {field}"
+
+            # Verify URL format
+            assert post["url"].startswith("https://idvork.in/")
+
+            # Verify markdown path is from a valid directory
+            assert any(
+                post["markdown_path"].startswith(d) for d in ("_d/", "_posts/", "td/")
+            ), f"Unexpected markdown_path prefix: {post['markdown_path']}"
+            assert post["markdown_path"].endswith(".md")
 
     async def test_all_blog_posts_e2e(self, server_endpoint: str):
         """Test all_blog_posts function against live endpoint."""
         async with MCPTestClient(server_endpoint) as client:
             content = await client.call_tool("all_blog_posts", {})
-            
-            # Should return valid JSON
-            import json
+
             data = json.loads(content)
-            
+
             # Check structure
             assert "count" in data
             assert "posts" in data
             assert isinstance(data["posts"], list)
             assert data["count"] > 0  # Should have some posts
-            
+
             # Check first post structure
-            if data["posts"]:
-                post = data["posts"][0]
-                required_fields = ["title", "url", "description", "last_modified", "doc_size", "markdown_path", "file_path", "redirect_url"]
-                for field in required_fields:
-                    assert field in post, f"Missing field: {field}"
-                
-                # Verify URL format
-                assert post["url"].startswith("https://idvork.in/")
-                
-                # Verify markdown path format
-                assert post["markdown_path"].startswith("_d/")
-                assert post["markdown_path"].endswith(".md")
+            assert len(data["posts"]) > 0, "Expected at least one post"
+            post = data["posts"][0]
+            required_fields = ["title", "url", "description", "last_modified", "doc_size", "markdown_path", "file_path", "redirect_url"]
+            for field in required_fields:
+                assert field in post, f"Missing field: {field}"
+
+            # Verify URL format
+            assert post["url"].startswith("https://idvork.in/")
+
+            # Verify markdown path is from a valid directory
+            assert any(
+                post["markdown_path"].startswith(d) for d in ("_d/", "_posts/", "td/")
+            ), f"Unexpected markdown_path prefix: {post['markdown_path']}"
+            assert post["markdown_path"].endswith(".md")
 
     async def test_blog_search_json_e2e(self, server_endpoint: str):
         """Test blog_search JSON format against live endpoint."""
@@ -374,8 +334,6 @@ class TestE2EBlogMCPServer:
                 "limit": 3
             })
 
-            # Should return valid JSON
-            import json
             data = json.loads(content)
 
             # Check if we got results or error
@@ -404,8 +362,10 @@ class TestE2EBlogMCPServer:
                     # Verify URL format
                     assert post["url"].startswith("https://idvork.in/")
 
-                    # Verify markdown path format
-                    assert post["markdown_path"].startswith("_d/")
+                    # Verify markdown path is from a valid directory
+                    assert any(
+                        post["markdown_path"].startswith(d) for d in ("_d/", "_posts/", "td/")
+                    ), f"Unexpected markdown_path prefix: {post['markdown_path']}"
                     assert post["markdown_path"].endswith(".md")
 
     async def test_get_recent_changes_default(self, server_endpoint: str):
@@ -517,8 +477,6 @@ class TestE2EBlogMCPServer:
         async with MCPTestClient(server_endpoint) as client:
             content = await client.call_tool("list_open_prs", {"since_days": 7})
 
-            # Should return valid JSON
-            import json
             data = json.loads(content)
 
             # Check required top-level fields
@@ -538,6 +496,23 @@ class TestE2EBlogMCPServer:
                 assert pr["state"] == "open", "All returned PRs should be open"
                 assert pr["url"].startswith("https://github.com/"), "PR URL should be a GitHub URL"
 
+    async def test_list_repos_e2e(self, server_endpoint: str):
+        """Test list_repos tool returns valid repository data."""
+        async with MCPTestClient(server_endpoint) as client:
+            content = await client.call_tool("list_repos")
+            data = json.loads(content)
+
+            # Check required top-level fields
+            assert "owner" in data, "Missing 'owner' field"
+            assert "default_repo" in data, "Missing 'default_repo' field"
+            assert "repositories" in data, "Missing 'repositories' field"
+            assert "pagination" in data, "Missing 'pagination' field"
+
+            # Verify values
+            assert isinstance(data["repositories"], list)
+            assert data["pagination"]["total_count"] > 0, "Should have at least one repository"
+            assert len(data["repositories"]) > 0
+
     async def test_get_recent_changes_performance(self, server_endpoint: str):
         """Test get_recent_changes handles parallel requests efficiently."""
         import time
@@ -551,14 +526,6 @@ class TestE2EBlogMCPServer:
             # Should complete reasonably quickly (under 10 seconds even with network latency)
             assert elapsed_time < 10, f"Should complete within 10 seconds, took {elapsed_time:.2f}s"
             assert "Recent changes" in content, "Should return valid response"
-
-
-@pytest.fixture(scope="session")
-def event_loop():
-    """Create event loop for async tests."""
-    loop = asyncio.new_event_loop()
-    yield loop
-    loop.close()
 
 
 def main():

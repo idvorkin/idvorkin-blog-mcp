@@ -13,7 +13,7 @@ from datetime import datetime, timedelta
 from unittest.mock import AsyncMock, patch, MagicMock
 
 import pytest
-from test_utils import MCPTestClient, BlogAssertions
+from test_utils import MCPTestClient
 
 # Add the current directory to Python path for importing the server
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -82,16 +82,6 @@ MOCK_COMMIT_DETAILS = {
 
 class TestBlogMCPServer:
     """Unit tests for Blog MCP Server with mixed real/mock API calls."""
-
-    @pytest.fixture
-    def mcp_server(self):
-        """Provide the FastMCP server instance for testing."""
-        return blog_mcp_server.mcp
-
-    @pytest.fixture
-    def assertions(self):
-        """Provide assertions helper."""
-        return BlogAssertions()
 
     async def test_blog_info_tool(self, mcp_server, assertions):
         """Test blog_info tool returns expected information."""
@@ -370,13 +360,13 @@ class TestBlogMCPServer:
                 "limit": 2
             })
 
-            import json
             data = json.loads(content)
 
-            # If results found, check limit is respected
-            if "posts" in data and data.get("count", 0) > 0:
-                assert len(data["posts"]) <= 2, f"Limit not respected: found {len(data['posts'])} results"
-                assert data["limit"] == 2
+            # Mock guarantees matches — assert unconditionally
+            assert "posts" in data
+            assert data.get("count", 0) > 0
+            assert len(data["posts"]) <= 2, f"Limit not respected: found {len(data['posts'])} results"
+            assert data["limit"] == 2
 
     @pytest.mark.network
     async def test_recent_blog_posts_real(self, mcp_server):
@@ -384,10 +374,8 @@ class TestBlogMCPServer:
         async with MCPTestClient(mcp_server) as client:
             content = await client.call_tool("recent_blog_posts", {"limit": 2})  # Reduced limit
             
-            # Should return valid JSON
-            import json
             data = json.loads(content)
-            
+
             # Check structure
             assert "count" in data
             assert "limit" in data
@@ -395,13 +383,13 @@ class TestBlogMCPServer:
             assert isinstance(data["posts"], list)
             assert data["limit"] == 2
             assert data["count"] <= 2
-            
-            # If posts exist, check structure
-            if data["posts"]:
-                post = data["posts"][0]
-                required_fields = ["title", "url", "description", "last_modified", "doc_size", "markdown_path", "file_path", "redirect_url"]
-                for field in required_fields:
-                    assert field in post, f"Missing field: {field}"
+
+            # Real API should return posts for a limit-2 query
+            assert len(data["posts"]) > 0, "Expected at least one recent post"
+            post = data["posts"][0]
+            required_fields = ["title", "url", "description", "last_modified", "doc_size", "markdown_path", "file_path", "redirect_url"]
+            for field in required_fields:
+                assert field in post, f"Missing field: {field}"
 
     @patch('blog_mcp_server.get_blog_data')
     async def test_all_blog_posts_mock(self, mock_get_blog_data, mcp_server):
@@ -486,32 +474,23 @@ class TestBlogMCPServer:
                 "limit": 2
             })
             
-            # Should return valid JSON
-            import json
+            # Mock data guarantees matches — assert unconditionally
             data = json.loads(content)
-            
-            # Check if we got results or error
-            if "error" in data:
-                # If no results, that's also valid JSON
-                assert isinstance(data["error"], str)
-                assert len(data["error"]) > 0
-            else:
-                # Check structure for successful results
-                assert "query" in data
-                assert "count" in data
-                assert "limit" in data
-                assert "posts" in data
-                assert isinstance(data["posts"], list)
-                assert data["query"] == "the"
-                assert data["limit"] == 2
-                assert data["count"] <= 2
-                
-                # If posts exist, check structure
-                if data["posts"]:
-                    post = data["posts"][0]
-                    required_fields = ["title", "url", "description", "last_modified", "doc_size", "markdown_path", "file_path", "redirect_url"]
-                    for field in required_fields:
-                        assert field in post, f"Missing field: {field}"
+            assert "query" in data
+            assert "count" in data
+            assert "limit" in data
+            assert "posts" in data
+            assert isinstance(data["posts"], list)
+            assert data["query"] == "the"
+            assert data["limit"] == 2
+            assert data["count"] <= 2
+
+            # Mock has two posts matching "the" — verify structure
+            assert len(data["posts"]) > 0, "Mock data should produce matches"
+            post = data["posts"][0]
+            required_fields = ["title", "url", "description", "last_modified", "doc_size", "markdown_path", "file_path", "redirect_url"]
+            for field in required_fields:
+                assert field in post, f"Missing field: {field}"
 
     @pytest.mark.network
     async def test_list_open_prs_default(self, mcp_server):

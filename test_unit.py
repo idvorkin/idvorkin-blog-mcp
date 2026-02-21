@@ -567,6 +567,7 @@ class TestBlogMCPServer:
         assert blog_mcp_server.mcp.name == "blog-mcp-server"
 
         expected_tools = [
+            "list_repos",
             "blog_info",
             "random_blog",
             "read_blog_post",

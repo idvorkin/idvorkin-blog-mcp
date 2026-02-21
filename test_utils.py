@@ -99,15 +99,6 @@ class BlogAssertions:
         assert "idvork.in" in content or "github.com" in content
 
     @staticmethod
-    def assert_search_results(content: str, query: str):
-        """Assert valid search results format."""
-        assert (
-            f"Found" in content and "blog posts matching" in content
-        ) or (
-            "No blog posts found" in content
-        )
-
-    @staticmethod
     def assert_random_blog_post(content: str, with_content: bool = False):
         """Assert random blog post format."""
         assert (

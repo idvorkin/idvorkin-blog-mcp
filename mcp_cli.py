@@ -12,7 +12,7 @@ from test_utils import MCPTestClient
 
 # Server endpoints (same as test_e2e.py)
 LOCAL_ENDPOINT = "http://localhost:8000/mcp"
-PRODUCTION_ENDPOINT = "https://idvorkin-blog-mcp.fastmcp.app/mcp"
+PRODUCTION_ENDPOINT = "https://idvorkin-blog-and-repo.fastmcp.app/mcp"
 
 
 def get_server_endpoint() -> str:
@@ -40,7 +40,7 @@ def main():
         print("\nExamples:")
         print("  mcp_cli.py blog_info")
         print("  mcp_cli.py read_blog_post '{\"url\":\"https://idvork.in/42\"}'")
-        print("  MCP_SERVER_ENDPOINT=https://idvorkin-blog-mcp.fastmcp.app/mcp mcp_cli.py blog_info")
+        print("  MCP_SERVER_ENDPOINT=https://idvorkin-blog-and-repo.fastmcp.app/mcp mcp_cli.py blog_info")
         sys.exit(1)
 
     tool_name = sys.argv[1]

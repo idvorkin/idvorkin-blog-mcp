@@ -35,12 +35,12 @@ test-e2e url="http://localhost:8000/mcp":
 # Run E2E tests against production server
 test-prod:
     @echo "🌐 Running E2E tests against PRODUCTION server..."
-    MCP_SERVER_ENDPOINT="https://idvorkin-blog-mcp.fastmcp.app/mcp" uv run pytest test_e2e.py -v --tb=short -n auto
+    MCP_SERVER_ENDPOINT="https://idvorkin-blog-and-repo.fastmcp.app/mcp" uv run pytest test_e2e.py -v --tb=short -n auto
 
 # Run E2E tests against production server (sequential for debugging)
 test-prod-sequential:
     @echo "🌐 Running E2E tests against PRODUCTION server (sequential)..."
-    MCP_SERVER_ENDPOINT="https://idvorkin-blog-mcp.fastmcp.app/mcp" uv run pytest test_e2e.py -v --tb=short
+    MCP_SERVER_ENDPOINT="https://idvorkin-blog-and-repo.fastmcp.app/mcp" uv run pytest test_e2e.py -v --tb=short
 
 # Run all tests (unit + E2E) in parallel
 test-all:
@@ -114,7 +114,7 @@ call tool args="{}":
 # Call tool against production server
 call-prod tool args="{}":
     @echo "🌐 Calling {{tool}} on PRODUCTION server"
-    @MCP_SERVER_ENDPOINT="https://idvorkin-blog-mcp.fastmcp.app/mcp" uv run python mcp_cli.py {{tool}} '{{args}}'
+    @MCP_SERVER_ENDPOINT="https://idvorkin-blog-and-repo.fastmcp.app/mcp" uv run python mcp_cli.py {{tool}} '{{args}}'
 
 # Call tool against local server (explicit)
 call-local tool args="{}":

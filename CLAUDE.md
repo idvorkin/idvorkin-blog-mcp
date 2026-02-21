@@ -74,5 +74,5 @@ Pre-commit hooks run Ruff (lint+format), Biome, Prettier (markdown/HTML), and Da
 
 ## Deployment
 
-- **FastMCP Cloud**: Auto-deploys on push to main. Live at https://idvorkin-blog-mcp.fastmcp.app/mcp
+- **FastMCP Cloud**: Auto-deploys on push to main. Live at https://idvorkin-blog-and-repo.fastmcp.app/mcp
 - **Google Cloud Run**: `just deploy PROJECT_ID [REGION]`

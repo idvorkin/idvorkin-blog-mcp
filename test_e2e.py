@@ -14,7 +14,7 @@ from test_utils import MCPTestClient, BlogAssertions
 
 # Server endpoints
 LOCAL_ENDPOINT = "http://localhost:9000/mcp"
-PRODUCTION_ENDPOINT = "https://idvorkin-blog-mcp.fastmcp.app/mcp"
+PRODUCTION_ENDPOINT = "https://idvorkin-blog-and-repo.fastmcp.app/mcp"
 
 
 def get_server_endpoint() -> str:
@@ -45,6 +45,7 @@ class TestE2EBlogMCPServer:
     async def test_list_tools(self, server_endpoint: str):
         """Test that all expected tools are available."""
         expected_tools = {
+            "list_repos",
             "blog_info",
             "random_blog",
             "read_blog_post",
